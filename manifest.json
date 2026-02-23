@@ -1,0 +1,9 @@
+{
+  "id": "open-claude-terminal",
+  "name": "Open Claude Terminal",
+  "version": "1.0.0",
+  "minAppVersion": "0.15.0",
+  "description": "Opens a terminal in the current note's directory and runs claude",
+  "author": "kyryl",
+  "isDesktopOnly": true
+}
