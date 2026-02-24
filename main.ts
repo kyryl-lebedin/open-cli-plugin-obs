@@ -8,17 +8,20 @@ interface PromptTemplate {
   id: string;
   name: string;
   prompt: string;
+  global: boolean;
 }
 
 interface PluginSettings {
   enableClaude: boolean;
   enableCursor: boolean;
+  enableLauncher: boolean;
   templates: PromptTemplate[];
 }
 
 const DEFAULT_SETTINGS: PluginSettings = {
   enableClaude: true,
   enableCursor: true,
+  enableLauncher: true,
   templates: [],
 };
 
@@ -50,11 +53,13 @@ export default class OpenClaudeTerminalPlugin extends Plugin {
       });
     }
 
-    this.addCommand({
-      id: "claude-launcher",
-      name: "Claude launcher",
-      callback: () => new LauncherModal(this.app, this).open(),
-    });
+    if (this.settings.enableLauncher) {
+      this.addCommand({
+        id: "claude-launcher",
+        name: "Claude launcher",
+        callback: () => new LauncherModal(this.app, this).open(),
+      });
+    }
   }
 
   openClaude() {
@@ -105,7 +110,7 @@ export default class OpenClaudeTerminalPlugin extends Plugin {
     });
   }
 
-  async spawnClaudeWithPrompt(prompt: string) {
+  async spawnClaudeWithPrompt(prompt: string, yolo = false) {
     const file = this.app.workspace.getActiveFile();
     if (!file) {
       new Notice("No active file");
@@ -136,7 +141,7 @@ export default class OpenClaudeTerminalPlugin extends Plugin {
       `cd "${dirPath.replace(/"/g, '\\"')}"`,
       `prompt=$(cat "${tmpPrompt.replace(/"/g, '\\"')}")`,
       `rm -f "${tmpPrompt.replace(/"/g, '\\"')}" "${tmpScript.replace(/"/g, '\\"')}"`,
-      `claude "$prompt"`,
+      `claude${yolo ? " --dangerously-skip-permissions" : ""} "$prompt"`,
       `exec bash`,
     ].join("\n"), "utf-8");
     fs.chmodSync(tmpScript, "755");
@@ -148,7 +153,7 @@ export default class OpenClaudeTerminalPlugin extends Plugin {
     });
   }
 
-  async runClaudeHeadless(prompt: string) {
+  async runClaudeHeadless(prompt: string, yolo = false) {
     const file = this.app.workspace.getActiveFile();
     if (!file) {
       new Notice("No active file");
@@ -178,7 +183,7 @@ export default class OpenClaudeTerminalPlugin extends Plugin {
       `source ~/.bashrc 2>/dev/null || source ~/.profile 2>/dev/null || true`,
       `export PATH="$HOME/.local/bin:$HOME/.nvm/versions/node/$(ls $HOME/.nvm/versions/node/ 2>/dev/null | tail -1)/bin:$PATH"`,
       `cd "${dirPath.replace(/"/g, '\\"')}"`,
-      `cat "${tmpPrompt.replace(/"/g, '\\"')}" | claude -p > "${tmpOutput.replace(/"/g, '\\"')}" 2>&1`,
+      `cat "${tmpPrompt.replace(/"/g, '\\"')}" | claude -p${yolo ? " --dangerously-skip-permissions" : ""} > "${tmpOutput.replace(/"/g, '\\"')}" 2>&1`,
       `rm -f "${tmpPrompt.replace(/"/g, '\\"')}" "${tmpScript.replace(/"/g, '\\"')}"`,
     ].join("\n"), "utf-8");
     fs.chmodSync(tmpScript, "755");
@@ -390,6 +395,7 @@ class LauncherModal extends Modal {
   }
 
   headless = false;
+  yolo = false;
 
   render() {
     const { contentEl } = this;
@@ -406,8 +412,15 @@ class LauncherModal extends Modal {
       new PromptInputModal(this.app, this.plugin).open();
     });
 
-    // Saved templates
-    for (const tpl of this.plugin.settings.templates) {
+    // Saved templates — filter by visibility
+    const file = this.app.workspace.getActiveFile();
+    const frontmatterAgents = this.getAgentsFromFrontmatter(file);
+    const visibleTemplates = this.plugin.settings.templates.filter((tpl) => {
+      if (tpl.global) return true;
+      return frontmatterAgents.includes(tpl.name);
+    });
+
+    for (const tpl of visibleTemplates) {
       const row = list.createDiv();
       row.style.cssText = "display:flex;align-items:center;gap:4px;margin-bottom:6px;";
 
@@ -416,9 +429,9 @@ class LauncherModal extends Modal {
       tplBtn.addEventListener("click", () => {
         this.close();
         if (this.headless) {
-          this.plugin.runClaudeHeadless(tpl.prompt);
+          this.plugin.runClaudeHeadless(tpl.prompt, this.yolo);
         } else {
-          this.plugin.spawnClaudeWithPrompt(tpl.prompt);
+          this.plugin.spawnClaudeWithPrompt(tpl.prompt, this.yolo);
         }
       });
 
@@ -460,6 +473,26 @@ class LauncherModal extends Modal {
       headlessBtn.style.background = this.headless ? "var(--interactive-accent)" : "";
       headlessBtn.style.color = this.headless ? "var(--text-on-accent)" : "";
     });
+
+    const yoloBtn = bottomRow.createEl("button", { text: "Yolo" });
+    yoloBtn.style.cssText = "padding:8px 16px;cursor:pointer;font-size:13px;border-radius:4px;" +
+      (this.yolo ? "opacity:1;background:var(--interactive-accent);color:var(--text-on-accent);" : "opacity:0.5;");
+    yoloBtn.addEventListener("click", () => {
+      this.yolo = !this.yolo;
+      yoloBtn.style.opacity = this.yolo ? "1" : "0.5";
+      yoloBtn.style.background = this.yolo ? "var(--interactive-accent)" : "";
+      yoloBtn.style.color = this.yolo ? "var(--text-on-accent)" : "";
+    });
+  }
+
+  getAgentsFromFrontmatter(file: import("obsidian").TFile | null): string[] {
+    if (!file) return [];
+    const cache = this.app.metadataCache.getFileCache(file);
+    const agents = cache?.frontmatter?.agents;
+    if (!agents) return [];
+    if (Array.isArray(agents)) return agents.map((a: any) => String(a).trim());
+    if (typeof agents === "string") return agents.split(",").map((a) => a.trim()).filter(Boolean);
+    return [];
   }
 
   onClose() {
@@ -469,10 +502,12 @@ class LauncherModal extends Modal {
 
 class AddTemplateOptionsModal extends Modal {
   plugin: OpenClaudeTerminalPlugin;
+  onBackOverride: (() => void) | null;
 
-  constructor(app: App, plugin: OpenClaudeTerminalPlugin) {
+  constructor(app: App, plugin: OpenClaudeTerminalPlugin, onBack?: () => void) {
     super(app);
     this.plugin = plugin;
+    this.onBackOverride = onBack ?? null;
   }
 
   onOpen() {
@@ -481,14 +516,18 @@ class AddTemplateOptionsModal extends Modal {
 
     createHeaderWithBack(contentEl, "Add new...", () => {
       this.close();
-      new LauncherModal(this.app, this.plugin).open();
+      if (this.onBackOverride) {
+        this.onBackOverride();
+      } else {
+        new LauncherModal(this.app, this.plugin).open();
+      }
     });
 
     const btn = contentEl.createEl("button", { text: "Fixed prompt template" });
     btn.style.cssText = "width:100%;padding:10px;cursor:pointer;font-size:14px;";
     btn.addEventListener("click", () => {
       this.close();
-      new AddTemplateModal(this.app, this.plugin).open();
+      new AddTemplateModal(this.app, this.plugin, this.onBackOverride ?? undefined).open();
     });
   }
 
@@ -499,10 +538,12 @@ class AddTemplateOptionsModal extends Modal {
 
 class AddTemplateModal extends Modal {
   plugin: OpenClaudeTerminalPlugin;
+  onBackOverride: (() => void) | null;
 
-  constructor(app: App, plugin: OpenClaudeTerminalPlugin) {
+  constructor(app: App, plugin: OpenClaudeTerminalPlugin, onBack?: () => void) {
     super(app);
     this.plugin = plugin;
+    this.onBackOverride = onBack ?? null;
   }
 
   onOpen() {
@@ -510,7 +551,11 @@ class AddTemplateModal extends Modal {
     contentEl.empty();
     createHeaderWithBack(contentEl, "New prompt template", () => {
       this.close();
-      new LauncherModal(this.app, this.plugin).open();
+      if (this.onBackOverride) {
+        this.onBackOverride();
+      } else {
+        new LauncherModal(this.app, this.plugin).open();
+      }
     });
 
     contentEl.createEl("label", { text: "Name" }).style.cssText = "font-size:13px;font-weight:600;";
@@ -521,6 +566,14 @@ class AddTemplateModal extends Modal {
     contentEl.createEl("label", { text: "Prompt" }).style.cssText = "font-size:13px;font-weight:600;";
     const { textArea: promptArea, cleanup } = createPromptTextArea(this.app, contentEl, "Enter the prompt... (@ to reference files)");
     this.cleanupFn = cleanup;
+
+    let isGlobal = true;
+    const globalRow = contentEl.createDiv();
+    globalRow.style.cssText = "display:flex;align-items:center;gap:8px;margin-top:10px;";
+    const globalCheckbox = globalRow.createEl("input", { type: "checkbox" }) as HTMLInputElement;
+    globalCheckbox.checked = true;
+    globalCheckbox.addEventListener("change", () => { isGlobal = globalCheckbox.checked; });
+    globalRow.createEl("span", { text: "Show on all files" }).style.fontSize = "13px";
 
     const saveBtn = contentEl.createEl("button", { text: "Save" });
     saveBtn.style.cssText = "margin-top:10px;padding:8px 20px;cursor:pointer;font-size:14px;";
@@ -535,10 +588,15 @@ class AddTemplateModal extends Modal {
         id: Date.now().toString(),
         name,
         prompt,
+        global: isGlobal,
       });
       await this.plugin.saveSettings();
       this.close();
-      new LauncherModal(this.app, this.plugin).open();
+      if (this.onBackOverride) {
+        this.onBackOverride();
+      } else {
+        new LauncherModal(this.app, this.plugin).open();
+      }
     });
   }
 
@@ -553,11 +611,13 @@ class AddTemplateModal extends Modal {
 class EditTemplateModal extends Modal {
   plugin: OpenClaudeTerminalPlugin;
   template: PromptTemplate;
+  onBackOverride: (() => void) | null;
 
-  constructor(app: App, plugin: OpenClaudeTerminalPlugin, template: PromptTemplate) {
+  constructor(app: App, plugin: OpenClaudeTerminalPlugin, template: PromptTemplate, onBack?: () => void) {
     super(app);
     this.plugin = plugin;
     this.template = template;
+    this.onBackOverride = onBack ?? null;
   }
 
   onOpen() {
@@ -565,7 +625,11 @@ class EditTemplateModal extends Modal {
     contentEl.empty();
     createHeaderWithBack(contentEl, "Edit template", () => {
       this.close();
-      new LauncherModal(this.app, this.plugin).open();
+      if (this.onBackOverride) {
+        this.onBackOverride();
+      } else {
+        new LauncherModal(this.app, this.plugin).open();
+      }
     });
 
     contentEl.createEl("label", { text: "Name" }).style.cssText = "font-size:13px;font-weight:600;";
@@ -576,6 +640,14 @@ class EditTemplateModal extends Modal {
     contentEl.createEl("label", { text: "Prompt" }).style.cssText = "font-size:13px;font-weight:600;";
     const { textArea: promptArea, cleanup } = createPromptTextArea(this.app, contentEl, "Enter the prompt... (@ to reference files)", this.template.prompt);
     this.cleanupFn = cleanup;
+
+    let isGlobal = this.template.global;
+    const globalRow = contentEl.createDiv();
+    globalRow.style.cssText = "display:flex;align-items:center;gap:8px;margin-top:10px;";
+    const globalCheckbox = globalRow.createEl("input", { type: "checkbox" }) as HTMLInputElement;
+    globalCheckbox.checked = isGlobal;
+    globalCheckbox.addEventListener("change", () => { isGlobal = globalCheckbox.checked; });
+    globalRow.createEl("span", { text: "Show on all files" }).style.fontSize = "13px";
 
     const saveBtn = contentEl.createEl("button", { text: "Save" });
     saveBtn.style.cssText = "margin-top:10px;padding:8px 20px;cursor:pointer;font-size:14px;";
@@ -588,9 +660,14 @@ class EditTemplateModal extends Modal {
       }
       this.template.name = name;
       this.template.prompt = prompt;
+      this.template.global = isGlobal;
       await this.plugin.saveSettings();
       this.close();
-      new LauncherModal(this.app, this.plugin).open();
+      if (this.onBackOverride) {
+        this.onBackOverride();
+      } else {
+        new LauncherModal(this.app, this.plugin).open();
+      }
     });
   }
 
@@ -606,6 +683,7 @@ class PromptInputModal extends Modal {
   plugin: OpenClaudeTerminalPlugin;
   cleanupFn: (() => void) | null = null;
   headless = false;
+  yolo = false;
 
   constructor(app: App, plugin: OpenClaudeTerminalPlugin) {
     super(app);
@@ -639,6 +717,15 @@ class PromptInputModal extends Modal {
       headlessBtn.style.color = this.headless ? "var(--text-on-accent)" : "";
     });
 
+    const yoloBtn = bottomRow.createEl("button", { text: "Yolo" });
+    yoloBtn.style.cssText = "padding:8px 16px;cursor:pointer;font-size:13px;opacity:0.5;border-radius:4px;";
+    yoloBtn.addEventListener("click", () => {
+      this.yolo = !this.yolo;
+      yoloBtn.style.opacity = this.yolo ? "1" : "0.5";
+      yoloBtn.style.background = this.yolo ? "var(--interactive-accent)" : "";
+      yoloBtn.style.color = this.yolo ? "var(--text-on-accent)" : "";
+    });
+
     submitBtn.addEventListener("click", () => {
       const prompt = textArea.getValue().trim();
       if (!prompt) {
@@ -647,9 +734,9 @@ class PromptInputModal extends Modal {
       }
       this.close();
       if (this.headless) {
-        this.plugin.runClaudeHeadless(prompt);
+        this.plugin.runClaudeHeadless(prompt, this.yolo);
       } else {
-        this.plugin.spawnClaudeWithPrompt(prompt);
+        this.plugin.spawnClaudeWithPrompt(prompt, this.yolo);
       }
     });
   }
@@ -684,6 +771,17 @@ class PluginSettingsTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName("Enable Claude Launcher")
+      .setDesc("Show 'Claude launcher' command")
+      .addToggle((toggle) =>
+        toggle.setValue(this.plugin.settings.enableLauncher).onChange(async (value) => {
+          this.plugin.settings.enableLauncher = value;
+          await this.plugin.saveSettings();
+          new Notice("Reload Obsidian to apply command changes");
+        })
+      );
+
+    new Setting(containerEl)
       .setName("Enable Open in Cursor")
       .setDesc("Show 'Open codebase in Cursor' command")
       .addToggle((toggle) =>
@@ -693,5 +791,73 @@ class PluginSettingsTab extends PluginSettingTab {
           new Notice("Reload Obsidian to apply command changes");
         })
       );
+
+    // Agents section
+    containerEl.createEl("h3", { text: "Agents" });
+
+    if (this.plugin.settings.templates.length === 0) {
+      containerEl.createEl("p", { text: "No agents created yet. Use the launcher to add templates." }).style.opacity = "0.6";
+    }
+
+    this.renderAgentList(containerEl);
+
+    new Setting(containerEl)
+      .addButton((btn) => {
+        btn.setButtonText("+ Add template");
+        btn.onClick(() => {
+          new AddTemplateOptionsModal(this.app, this.plugin, () => {
+            this.display();
+          }).open();
+        });
+      });
+  }
+
+  renderAgentList(containerEl: HTMLElement) {
+    const listEl = containerEl.createDiv({ cls: "agent-list" });
+
+    for (const tpl of this.plugin.settings.templates) {
+      const setting = new Setting(listEl)
+        .setName(tpl.name)
+        .setDesc(tpl.prompt.length > 60 ? tpl.prompt.slice(0, 60) + "..." : tpl.prompt);
+
+      // "Global" button instead of toggle
+      setting.addButton((btn) => {
+        const isGlobal = tpl.global ?? false;
+        btn.setButtonText("Global");
+        btn.onClick(async () => {
+          tpl.global = !tpl.global;
+          await this.plugin.saveSettings();
+          this.display();
+        });
+        if (isGlobal) {
+          btn.buttonEl.style.cssText = "background:var(--interactive-accent);color:var(--text-on-accent);";
+        } else {
+          btn.buttonEl.style.cssText = "opacity:0.5;";
+        }
+      });
+
+      setting.addExtraButton((btn) =>
+        btn
+          .setIcon("pencil")
+          .setTooltip("Edit prompt")
+          .onClick(() => {
+            new EditTemplateModal(this.app, this.plugin, tpl, () => {
+              // Return to settings tab instead of launcher
+              this.display();
+            }).open();
+          })
+      );
+
+      setting.addExtraButton((btn) =>
+        btn
+          .setIcon("trash")
+          .setTooltip("Delete agent")
+          .onClick(async () => {
+            this.plugin.settings.templates = this.plugin.settings.templates.filter((t) => t.id !== tpl.id);
+            await this.plugin.saveSettings();
+            this.display();
+          })
+      );
+    }
   }
 }

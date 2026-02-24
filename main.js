@@ -40,6 +40,7 @@ var os = __toESM(require("os"));
 var DEFAULT_SETTINGS = {
   enableClaude: true,
   enableCursor: true,
+  enableLauncher: true,
   templates: []
 };
 var OpenClaudeTerminalPlugin = class extends import_obsidian.Plugin {
@@ -68,11 +69,13 @@ var OpenClaudeTerminalPlugin = class extends import_obsidian.Plugin {
         callback: () => this.openCursor()
       });
     }
-    this.addCommand({
-      id: "claude-launcher",
-      name: "Claude launcher",
-      callback: () => new LauncherModal(this.app, this).open()
-    });
+    if (this.settings.enableLauncher) {
+      this.addCommand({
+        id: "claude-launcher",
+        name: "Claude launcher",
+        callback: () => new LauncherModal(this.app, this).open()
+      });
+    }
   }
   openClaude() {
     var _a, _b;
@@ -116,7 +119,7 @@ var OpenClaudeTerminalPlugin = class extends import_obsidian.Plugin {
       }
     });
   }
-  async spawnClaudeWithPrompt(prompt) {
+  async spawnClaudeWithPrompt(prompt, yolo = false) {
     var _a, _b;
     const file = this.app.workspace.getActiveFile();
     if (!file) {
@@ -140,7 +143,7 @@ var OpenClaudeTerminalPlugin = class extends import_obsidian.Plugin {
       `cd "${dirPath.replace(/"/g, '\\"')}"`,
       `prompt=$(cat "${tmpPrompt.replace(/"/g, '\\"')}")`,
       `rm -f "${tmpPrompt.replace(/"/g, '\\"')}" "${tmpScript.replace(/"/g, '\\"')}"`,
-      `claude "$prompt"`,
+      `claude${yolo ? " --dangerously-skip-permissions" : ""} "$prompt"`,
       `exec bash`
     ].join("\n"), "utf-8");
     fs.chmodSync(tmpScript, "755");
@@ -150,7 +153,7 @@ var OpenClaudeTerminalPlugin = class extends import_obsidian.Plugin {
       }
     });
   }
-  async runClaudeHeadless(prompt) {
+  async runClaudeHeadless(prompt, yolo = false) {
     var _a, _b;
     const file = this.app.workspace.getActiveFile();
     if (!file) {
@@ -176,7 +179,7 @@ var OpenClaudeTerminalPlugin = class extends import_obsidian.Plugin {
       `source ~/.bashrc 2>/dev/null || source ~/.profile 2>/dev/null || true`,
       `export PATH="$HOME/.local/bin:$HOME/.nvm/versions/node/$(ls $HOME/.nvm/versions/node/ 2>/dev/null | tail -1)/bin:$PATH"`,
       `cd "${dirPath.replace(/"/g, '\\"')}"`,
-      `cat "${tmpPrompt.replace(/"/g, '\\"')}" | claude -p > "${tmpOutput.replace(/"/g, '\\"')}" 2>&1`,
+      `cat "${tmpPrompt.replace(/"/g, '\\"')}" | claude -p${yolo ? " --dangerously-skip-permissions" : ""} > "${tmpOutput.replace(/"/g, '\\"')}" 2>&1`,
       `rm -f "${tmpPrompt.replace(/"/g, '\\"')}" "${tmpScript.replace(/"/g, '\\"')}"`
     ].join("\n"), "utf-8");
     fs.chmodSync(tmpScript, "755");
@@ -346,6 +349,7 @@ var LauncherModal = class extends import_obsidian.Modal {
   constructor(app, plugin) {
     super(app);
     this.headless = false;
+    this.yolo = false;
     this.plugin = plugin;
   }
   onOpen() {
@@ -362,7 +366,13 @@ var LauncherModal = class extends import_obsidian.Modal {
       this.close();
       new PromptInputModal(this.app, this.plugin).open();
     });
-    for (const tpl of this.plugin.settings.templates) {
+    const file = this.app.workspace.getActiveFile();
+    const frontmatterAgents = this.getAgentsFromFrontmatter(file);
+    const visibleTemplates = this.plugin.settings.templates.filter((tpl) => {
+      if (tpl.global) return true;
+      return frontmatterAgents.includes(tpl.name);
+    });
+    for (const tpl of visibleTemplates) {
       const row = list.createDiv();
       row.style.cssText = "display:flex;align-items:center;gap:4px;margin-bottom:6px;";
       const tplBtn = row.createEl("button", { text: tpl.name });
@@ -370,9 +380,9 @@ var LauncherModal = class extends import_obsidian.Modal {
       tplBtn.addEventListener("click", () => {
         this.close();
         if (this.headless) {
-          this.plugin.runClaudeHeadless(tpl.prompt);
+          this.plugin.runClaudeHeadless(tpl.prompt, this.yolo);
         } else {
-          this.plugin.spawnClaudeWithPrompt(tpl.prompt);
+          this.plugin.spawnClaudeWithPrompt(tpl.prompt, this.yolo);
         }
       });
       const editBtn = row.createEl("button", { text: "\u270E" });
@@ -407,28 +417,52 @@ var LauncherModal = class extends import_obsidian.Modal {
       headlessBtn.style.background = this.headless ? "var(--interactive-accent)" : "";
       headlessBtn.style.color = this.headless ? "var(--text-on-accent)" : "";
     });
+    const yoloBtn = bottomRow.createEl("button", { text: "Yolo" });
+    yoloBtn.style.cssText = "padding:8px 16px;cursor:pointer;font-size:13px;border-radius:4px;" + (this.yolo ? "opacity:1;background:var(--interactive-accent);color:var(--text-on-accent);" : "opacity:0.5;");
+    yoloBtn.addEventListener("click", () => {
+      this.yolo = !this.yolo;
+      yoloBtn.style.opacity = this.yolo ? "1" : "0.5";
+      yoloBtn.style.background = this.yolo ? "var(--interactive-accent)" : "";
+      yoloBtn.style.color = this.yolo ? "var(--text-on-accent)" : "";
+    });
+  }
+  getAgentsFromFrontmatter(file) {
+    var _a;
+    if (!file) return [];
+    const cache = this.app.metadataCache.getFileCache(file);
+    const agents = (_a = cache == null ? void 0 : cache.frontmatter) == null ? void 0 : _a.agents;
+    if (!agents) return [];
+    if (Array.isArray(agents)) return agents.map((a) => String(a).trim());
+    if (typeof agents === "string") return agents.split(",").map((a) => a.trim()).filter(Boolean);
+    return [];
   }
   onClose() {
     this.contentEl.empty();
   }
 };
 var AddTemplateOptionsModal = class extends import_obsidian.Modal {
-  constructor(app, plugin) {
+  constructor(app, plugin, onBack) {
     super(app);
     this.plugin = plugin;
+    this.onBackOverride = onBack != null ? onBack : null;
   }
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
     createHeaderWithBack(contentEl, "Add new...", () => {
       this.close();
-      new LauncherModal(this.app, this.plugin).open();
+      if (this.onBackOverride) {
+        this.onBackOverride();
+      } else {
+        new LauncherModal(this.app, this.plugin).open();
+      }
     });
     const btn = contentEl.createEl("button", { text: "Fixed prompt template" });
     btn.style.cssText = "width:100%;padding:10px;cursor:pointer;font-size:14px;";
     btn.addEventListener("click", () => {
+      var _a;
       this.close();
-      new AddTemplateModal(this.app, this.plugin).open();
+      new AddTemplateModal(this.app, this.plugin, (_a = this.onBackOverride) != null ? _a : void 0).open();
     });
   }
   onClose() {
@@ -436,17 +470,22 @@ var AddTemplateOptionsModal = class extends import_obsidian.Modal {
   }
 };
 var AddTemplateModal = class extends import_obsidian.Modal {
-  constructor(app, plugin) {
+  constructor(app, plugin, onBack) {
     super(app);
     this.cleanupFn = null;
     this.plugin = plugin;
+    this.onBackOverride = onBack != null ? onBack : null;
   }
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
     createHeaderWithBack(contentEl, "New prompt template", () => {
       this.close();
-      new LauncherModal(this.app, this.plugin).open();
+      if (this.onBackOverride) {
+        this.onBackOverride();
+      } else {
+        new LauncherModal(this.app, this.plugin).open();
+      }
     });
     contentEl.createEl("label", { text: "Name" }).style.cssText = "font-size:13px;font-weight:600;";
     const nameInput = contentEl.createEl("input", { type: "text" });
@@ -455,6 +494,15 @@ var AddTemplateModal = class extends import_obsidian.Modal {
     contentEl.createEl("label", { text: "Prompt" }).style.cssText = "font-size:13px;font-weight:600;";
     const { textArea: promptArea, cleanup } = createPromptTextArea(this.app, contentEl, "Enter the prompt... (@ to reference files)");
     this.cleanupFn = cleanup;
+    let isGlobal = true;
+    const globalRow = contentEl.createDiv();
+    globalRow.style.cssText = "display:flex;align-items:center;gap:8px;margin-top:10px;";
+    const globalCheckbox = globalRow.createEl("input", { type: "checkbox" });
+    globalCheckbox.checked = true;
+    globalCheckbox.addEventListener("change", () => {
+      isGlobal = globalCheckbox.checked;
+    });
+    globalRow.createEl("span", { text: "Show on all files" }).style.fontSize = "13px";
     const saveBtn = contentEl.createEl("button", { text: "Save" });
     saveBtn.style.cssText = "margin-top:10px;padding:8px 20px;cursor:pointer;font-size:14px;";
     saveBtn.addEventListener("click", async () => {
@@ -467,11 +515,16 @@ var AddTemplateModal = class extends import_obsidian.Modal {
       this.plugin.settings.templates.push({
         id: Date.now().toString(),
         name,
-        prompt
+        prompt,
+        global: isGlobal
       });
       await this.plugin.saveSettings();
       this.close();
-      new LauncherModal(this.app, this.plugin).open();
+      if (this.onBackOverride) {
+        this.onBackOverride();
+      } else {
+        new LauncherModal(this.app, this.plugin).open();
+      }
     });
   }
   onClose() {
@@ -481,18 +534,23 @@ var AddTemplateModal = class extends import_obsidian.Modal {
   }
 };
 var EditTemplateModal = class extends import_obsidian.Modal {
-  constructor(app, plugin, template) {
+  constructor(app, plugin, template, onBack) {
     super(app);
     this.cleanupFn = null;
     this.plugin = plugin;
     this.template = template;
+    this.onBackOverride = onBack != null ? onBack : null;
   }
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
     createHeaderWithBack(contentEl, "Edit template", () => {
       this.close();
-      new LauncherModal(this.app, this.plugin).open();
+      if (this.onBackOverride) {
+        this.onBackOverride();
+      } else {
+        new LauncherModal(this.app, this.plugin).open();
+      }
     });
     contentEl.createEl("label", { text: "Name" }).style.cssText = "font-size:13px;font-weight:600;";
     const nameInput = contentEl.createEl("input", { type: "text" });
@@ -501,6 +559,15 @@ var EditTemplateModal = class extends import_obsidian.Modal {
     contentEl.createEl("label", { text: "Prompt" }).style.cssText = "font-size:13px;font-weight:600;";
     const { textArea: promptArea, cleanup } = createPromptTextArea(this.app, contentEl, "Enter the prompt... (@ to reference files)", this.template.prompt);
     this.cleanupFn = cleanup;
+    let isGlobal = this.template.global;
+    const globalRow = contentEl.createDiv();
+    globalRow.style.cssText = "display:flex;align-items:center;gap:8px;margin-top:10px;";
+    const globalCheckbox = globalRow.createEl("input", { type: "checkbox" });
+    globalCheckbox.checked = isGlobal;
+    globalCheckbox.addEventListener("change", () => {
+      isGlobal = globalCheckbox.checked;
+    });
+    globalRow.createEl("span", { text: "Show on all files" }).style.fontSize = "13px";
     const saveBtn = contentEl.createEl("button", { text: "Save" });
     saveBtn.style.cssText = "margin-top:10px;padding:8px 20px;cursor:pointer;font-size:14px;";
     saveBtn.addEventListener("click", async () => {
@@ -512,9 +579,14 @@ var EditTemplateModal = class extends import_obsidian.Modal {
       }
       this.template.name = name;
       this.template.prompt = prompt;
+      this.template.global = isGlobal;
       await this.plugin.saveSettings();
       this.close();
-      new LauncherModal(this.app, this.plugin).open();
+      if (this.onBackOverride) {
+        this.onBackOverride();
+      } else {
+        new LauncherModal(this.app, this.plugin).open();
+      }
     });
   }
   onClose() {
@@ -528,6 +600,7 @@ var PromptInputModal = class extends import_obsidian.Modal {
     super(app);
     this.cleanupFn = null;
     this.headless = false;
+    this.yolo = false;
     this.plugin = plugin;
   }
   onOpen() {
@@ -552,6 +625,14 @@ var PromptInputModal = class extends import_obsidian.Modal {
       headlessBtn.style.background = this.headless ? "var(--interactive-accent)" : "";
       headlessBtn.style.color = this.headless ? "var(--text-on-accent)" : "";
     });
+    const yoloBtn = bottomRow.createEl("button", { text: "Yolo" });
+    yoloBtn.style.cssText = "padding:8px 16px;cursor:pointer;font-size:13px;opacity:0.5;border-radius:4px;";
+    yoloBtn.addEventListener("click", () => {
+      this.yolo = !this.yolo;
+      yoloBtn.style.opacity = this.yolo ? "1" : "0.5";
+      yoloBtn.style.background = this.yolo ? "var(--interactive-accent)" : "";
+      yoloBtn.style.color = this.yolo ? "var(--text-on-accent)" : "";
+    });
     submitBtn.addEventListener("click", () => {
       const prompt = textArea.getValue().trim();
       if (!prompt) {
@@ -560,9 +641,9 @@ var PromptInputModal = class extends import_obsidian.Modal {
       }
       this.close();
       if (this.headless) {
-        this.plugin.runClaudeHeadless(prompt);
+        this.plugin.runClaudeHeadless(prompt, this.yolo);
       } else {
-        this.plugin.spawnClaudeWithPrompt(prompt);
+        this.plugin.spawnClaudeWithPrompt(prompt, this.yolo);
       }
     });
   }
@@ -587,6 +668,13 @@ var PluginSettingsTab = class extends import_obsidian.PluginSettingTab {
         new import_obsidian.Notice("Reload Obsidian to apply command changes");
       })
     );
+    new import_obsidian.Setting(containerEl).setName("Enable Claude Launcher").setDesc("Show 'Claude launcher' command").addToggle(
+      (toggle) => toggle.setValue(this.plugin.settings.enableLauncher).onChange(async (value) => {
+        this.plugin.settings.enableLauncher = value;
+        await this.plugin.saveSettings();
+        new import_obsidian.Notice("Reload Obsidian to apply command changes");
+      })
+    );
     new import_obsidian.Setting(containerEl).setName("Enable Open in Cursor").setDesc("Show 'Open codebase in Cursor' command").addToggle(
       (toggle) => toggle.setValue(this.plugin.settings.enableCursor).onChange(async (value) => {
         this.plugin.settings.enableCursor = value;
@@ -594,5 +682,53 @@ var PluginSettingsTab = class extends import_obsidian.PluginSettingTab {
         new import_obsidian.Notice("Reload Obsidian to apply command changes");
       })
     );
+    containerEl.createEl("h3", { text: "Agents" });
+    if (this.plugin.settings.templates.length === 0) {
+      containerEl.createEl("p", { text: "No agents created yet. Use the launcher to add templates." }).style.opacity = "0.6";
+    }
+    this.renderAgentList(containerEl);
+    new import_obsidian.Setting(containerEl).addButton((btn) => {
+      btn.setButtonText("+ Add template");
+      btn.onClick(() => {
+        new AddTemplateOptionsModal(this.app, this.plugin, () => {
+          this.display();
+        }).open();
+      });
+    });
+  }
+  renderAgentList(containerEl) {
+    const listEl = containerEl.createDiv({ cls: "agent-list" });
+    for (const tpl of this.plugin.settings.templates) {
+      const setting = new import_obsidian.Setting(listEl).setName(tpl.name).setDesc(tpl.prompt.length > 60 ? tpl.prompt.slice(0, 60) + "..." : tpl.prompt);
+      setting.addButton((btn) => {
+        var _a;
+        const isGlobal = (_a = tpl.global) != null ? _a : false;
+        btn.setButtonText("Global");
+        btn.onClick(async () => {
+          tpl.global = !tpl.global;
+          await this.plugin.saveSettings();
+          this.display();
+        });
+        if (isGlobal) {
+          btn.buttonEl.style.cssText = "background:var(--interactive-accent);color:var(--text-on-accent);";
+        } else {
+          btn.buttonEl.style.cssText = "opacity:0.5;";
+        }
+      });
+      setting.addExtraButton(
+        (btn) => btn.setIcon("pencil").setTooltip("Edit prompt").onClick(() => {
+          new EditTemplateModal(this.app, this.plugin, tpl, () => {
+            this.display();
+          }).open();
+        })
+      );
+      setting.addExtraButton(
+        (btn) => btn.setIcon("trash").setTooltip("Delete agent").onClick(async () => {
+          this.plugin.settings.templates = this.plugin.settings.templates.filter((t) => t.id !== tpl.id);
+          await this.plugin.saveSettings();
+          this.display();
+        })
+      );
+    }
   }
 };
