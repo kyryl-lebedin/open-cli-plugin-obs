@@ -259,6 +259,16 @@ function attachMentionAutocomplete(app: App, wrapper: HTMLDivElement, el: HTMLTe
   return { hideDropdown };
 }
 
+// --- Helper to create header with back button ---
+function createHeaderWithBack(container: HTMLElement, title: string, onBack: () => void) {
+  const header = container.createDiv();
+  header.style.cssText = "display:flex;align-items:center;gap:8px;margin-bottom:10px;";
+  const backBtn = header.createEl("button", { text: "\u2190" });
+  backBtn.style.cssText = "padding:4px 10px;cursor:pointer;font-size:16px;line-height:1;border-radius:4px;";
+  backBtn.addEventListener("click", onBack);
+  header.createEl("h3", { text: title }).style.margin = "0";
+}
+
 // --- Helper to create a textarea with @ autocomplete inside a container ---
 function createPromptTextArea(app: App, container: HTMLElement, placeholder: string, initialValue?: string): { textArea: TextAreaComponent; cleanup: () => void } {
   const wrapper = container.createDiv();
@@ -354,14 +364,10 @@ class AddTemplateOptionsModal extends Modal {
     const { contentEl } = this;
     contentEl.empty();
 
-    const backBtn = contentEl.createEl("button", { text: "\u2190 Back" });
-    backBtn.style.cssText = "padding:4px 12px;cursor:pointer;font-size:13px;margin-bottom:10px;";
-    backBtn.addEventListener("click", () => {
+    createHeaderWithBack(contentEl, "Add new...", () => {
       this.close();
       new LauncherModal(this.app, this.plugin).open();
     });
-
-    contentEl.createEl("h3", { text: "Add new..." });
 
     const btn = contentEl.createEl("button", { text: "Fixed prompt template" });
     btn.style.cssText = "width:100%;padding:10px;cursor:pointer;font-size:14px;";
@@ -387,14 +393,10 @@ class AddTemplateModal extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
-    const backBtn = contentEl.createEl("button", { text: "\u2190 Back" });
-    backBtn.style.cssText = "padding:4px 12px;cursor:pointer;font-size:13px;margin-bottom:10px;";
-    backBtn.addEventListener("click", () => {
+    createHeaderWithBack(contentEl, "New prompt template", () => {
       this.close();
       new LauncherModal(this.app, this.plugin).open();
     });
-
-    contentEl.createEl("h3", { text: "New prompt template" });
 
     contentEl.createEl("label", { text: "Name" }).style.cssText = "font-size:13px;font-weight:600;";
     const nameInput = contentEl.createEl("input", { type: "text" });
@@ -446,14 +448,10 @@ class EditTemplateModal extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
-    const backBtn = contentEl.createEl("button", { text: "\u2190 Back" });
-    backBtn.style.cssText = "padding:4px 12px;cursor:pointer;font-size:13px;margin-bottom:10px;";
-    backBtn.addEventListener("click", () => {
+    createHeaderWithBack(contentEl, "Edit template", () => {
       this.close();
       new LauncherModal(this.app, this.plugin).open();
     });
-
-    contentEl.createEl("h3", { text: "Edit template" });
 
     contentEl.createEl("label", { text: "Name" }).style.cssText = "font-size:13px;font-weight:600;";
     const nameInput = contentEl.createEl("input", { type: "text" });
@@ -501,14 +499,10 @@ class PromptInputModal extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
-    const backBtn = contentEl.createEl("button", { text: "\u2190 Back" });
-    backBtn.style.cssText = "padding:4px 12px;cursor:pointer;font-size:13px;margin-bottom:10px;";
-    backBtn.addEventListener("click", () => {
+    createHeaderWithBack(contentEl, "Enter prompt", () => {
       this.close();
       new LauncherModal(this.app, this.plugin).open();
     });
-
-    contentEl.createEl("h3", { text: "Enter prompt" });
 
     const { textArea, cleanup } = createPromptTextArea(this.app, contentEl, "Type your prompt... (@ for files, {{title}} / {{note}} for current note)");
     textArea.inputEl.style.minHeight = "100px";

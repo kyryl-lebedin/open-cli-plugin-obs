@@ -244,6 +244,14 @@ function attachMentionAutocomplete(app, wrapper, el) {
   });
   return { hideDropdown };
 }
+function createHeaderWithBack(container, title, onBack) {
+  const header = container.createDiv();
+  header.style.cssText = "display:flex;align-items:center;gap:8px;margin-bottom:10px;";
+  const backBtn = header.createEl("button", { text: "\u2190" });
+  backBtn.style.cssText = "padding:4px 10px;cursor:pointer;font-size:16px;line-height:1;border-radius:4px;";
+  backBtn.addEventListener("click", onBack);
+  header.createEl("h3", { text: title }).style.margin = "0";
+}
 function createPromptTextArea(app, container, placeholder, initialValue) {
   const wrapper = container.createDiv();
   wrapper.style.position = "relative";
@@ -317,13 +325,10 @@ var AddTemplateOptionsModal = class extends import_obsidian.Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
-    const backBtn = contentEl.createEl("button", { text: "\u2190 Back" });
-    backBtn.style.cssText = "padding:4px 12px;cursor:pointer;font-size:13px;margin-bottom:10px;";
-    backBtn.addEventListener("click", () => {
+    createHeaderWithBack(contentEl, "Add new...", () => {
       this.close();
       new LauncherModal(this.app, this.plugin).open();
     });
-    contentEl.createEl("h3", { text: "Add new..." });
     const btn = contentEl.createEl("button", { text: "Fixed prompt template" });
     btn.style.cssText = "width:100%;padding:10px;cursor:pointer;font-size:14px;";
     btn.addEventListener("click", () => {
@@ -344,13 +349,10 @@ var AddTemplateModal = class extends import_obsidian.Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
-    const backBtn = contentEl.createEl("button", { text: "\u2190 Back" });
-    backBtn.style.cssText = "padding:4px 12px;cursor:pointer;font-size:13px;margin-bottom:10px;";
-    backBtn.addEventListener("click", () => {
+    createHeaderWithBack(contentEl, "New prompt template", () => {
       this.close();
       new LauncherModal(this.app, this.plugin).open();
     });
-    contentEl.createEl("h3", { text: "New prompt template" });
     contentEl.createEl("label", { text: "Name" }).style.cssText = "font-size:13px;font-weight:600;";
     const nameInput = contentEl.createEl("input", { type: "text" });
     nameInput.style.cssText = "width:100%;padding:8px;font-size:14px;margin-bottom:10px;";
@@ -393,13 +395,10 @@ var EditTemplateModal = class extends import_obsidian.Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
-    const backBtn = contentEl.createEl("button", { text: "\u2190 Back" });
-    backBtn.style.cssText = "padding:4px 12px;cursor:pointer;font-size:13px;margin-bottom:10px;";
-    backBtn.addEventListener("click", () => {
+    createHeaderWithBack(contentEl, "Edit template", () => {
       this.close();
       new LauncherModal(this.app, this.plugin).open();
     });
-    contentEl.createEl("h3", { text: "Edit template" });
     contentEl.createEl("label", { text: "Name" }).style.cssText = "font-size:13px;font-weight:600;";
     const nameInput = contentEl.createEl("input", { type: "text" });
     nameInput.style.cssText = "width:100%;padding:8px;font-size:14px;margin-bottom:10px;";
@@ -438,13 +437,10 @@ var PromptInputModal = class extends import_obsidian.Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
-    const backBtn = contentEl.createEl("button", { text: "\u2190 Back" });
-    backBtn.style.cssText = "padding:4px 12px;cursor:pointer;font-size:13px;margin-bottom:10px;";
-    backBtn.addEventListener("click", () => {
+    createHeaderWithBack(contentEl, "Enter prompt", () => {
       this.close();
       new LauncherModal(this.app, this.plugin).open();
     });
-    contentEl.createEl("h3", { text: "Enter prompt" });
     const { textArea, cleanup } = createPromptTextArea(this.app, contentEl, "Type your prompt... (@ for files, {{title}} / {{note}} for current note)");
     textArea.inputEl.style.minHeight = "100px";
     this.cleanupFn = cleanup;
