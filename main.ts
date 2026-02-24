@@ -4,6 +4,9 @@ import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
 
+const PERMISSION_MODES = ["default", "plan", "acceptEdits", "bypassPermissions"] as const;
+type PermissionMode = typeof PERMISSION_MODES[number];
+
 interface PromptTemplate {
   id: string;
   name: string;
@@ -110,7 +113,7 @@ export default class OpenClaudeTerminalPlugin extends Plugin {
     });
   }
 
-  async spawnClaudeWithPrompt(prompt: string, yolo = false) {
+  async spawnClaudeWithPrompt(prompt: string, permissionMode: PermissionMode = "default") {
     const file = this.app.workspace.getActiveFile();
     if (!file) {
       new Notice("No active file");
@@ -141,7 +144,7 @@ export default class OpenClaudeTerminalPlugin extends Plugin {
       `cd "${dirPath.replace(/"/g, '\\"')}"`,
       `prompt=$(cat "${tmpPrompt.replace(/"/g, '\\"')}")`,
       `rm -f "${tmpPrompt.replace(/"/g, '\\"')}" "${tmpScript.replace(/"/g, '\\"')}"`,
-      `claude${yolo ? " --dangerously-skip-permissions" : ""} "$prompt"`,
+      `claude${permissionMode !== "default" ? ` --permission-mode ${permissionMode}` : ""} "$prompt"`,
       `exec bash`,
     ].join("\n"), "utf-8");
     fs.chmodSync(tmpScript, "755");
@@ -153,7 +156,7 @@ export default class OpenClaudeTerminalPlugin extends Plugin {
     });
   }
 
-  async runClaudeHeadless(prompt: string, yolo = false) {
+  async runClaudeHeadless(prompt: string, permissionMode: PermissionMode = "default") {
     const file = this.app.workspace.getActiveFile();
     if (!file) {
       new Notice("No active file");
@@ -183,7 +186,7 @@ export default class OpenClaudeTerminalPlugin extends Plugin {
       `source ~/.bashrc 2>/dev/null || source ~/.profile 2>/dev/null || true`,
       `export PATH="$HOME/.local/bin:$HOME/.nvm/versions/node/$(ls $HOME/.nvm/versions/node/ 2>/dev/null | tail -1)/bin:$PATH"`,
       `cd "${dirPath.replace(/"/g, '\\"')}"`,
-      `cat "${tmpPrompt.replace(/"/g, '\\"')}" | claude -p${yolo ? " --dangerously-skip-permissions" : ""} > "${tmpOutput.replace(/"/g, '\\"')}" 2>&1`,
+      `cat "${tmpPrompt.replace(/"/g, '\\"')}" | claude -p${permissionMode !== "default" ? ` --permission-mode ${permissionMode}` : ""} > "${tmpOutput.replace(/"/g, '\\"')}" 2>&1`,
       `rm -f "${tmpPrompt.replace(/"/g, '\\"')}" "${tmpScript.replace(/"/g, '\\"')}"`,
     ].join("\n"), "utf-8");
     fs.chmodSync(tmpScript, "755");
@@ -395,7 +398,7 @@ class LauncherModal extends Modal {
   }
 
   headless = false;
-  yolo = false;
+  permissionMode: PermissionMode = "default";
 
   render() {
     const { contentEl } = this;
@@ -429,9 +432,9 @@ class LauncherModal extends Modal {
       tplBtn.addEventListener("click", () => {
         this.close();
         if (this.headless) {
-          this.plugin.runClaudeHeadless(tpl.prompt, this.yolo);
+          this.plugin.runClaudeHeadless(tpl.prompt, this.permissionMode);
         } else {
-          this.plugin.spawnClaudeWithPrompt(tpl.prompt, this.yolo);
+          this.plugin.spawnClaudeWithPrompt(tpl.prompt, this.permissionMode);
         }
       });
 
@@ -474,14 +477,14 @@ class LauncherModal extends Modal {
       headlessBtn.style.color = this.headless ? "var(--text-on-accent)" : "";
     });
 
-    const yoloBtn = bottomRow.createEl("button", { text: "Yolo" });
-    yoloBtn.style.cssText = "padding:8px 16px;cursor:pointer;font-size:13px;border-radius:4px;" +
-      (this.yolo ? "opacity:1;background:var(--interactive-accent);color:var(--text-on-accent);" : "opacity:0.5;");
-    yoloBtn.addEventListener("click", () => {
-      this.yolo = !this.yolo;
-      yoloBtn.style.opacity = this.yolo ? "1" : "0.5";
-      yoloBtn.style.background = this.yolo ? "var(--interactive-accent)" : "";
-      yoloBtn.style.color = this.yolo ? "var(--text-on-accent)" : "";
+    const modeSelect = bottomRow.createEl("select");
+    modeSelect.style.cssText = "padding:6px 10px;font-size:13px;border-radius:4px;cursor:pointer;";
+    for (const mode of PERMISSION_MODES) {
+      const opt = modeSelect.createEl("option", { text: mode, value: mode });
+      if (mode === this.permissionMode) opt.selected = true;
+    }
+    modeSelect.addEventListener("change", () => {
+      this.permissionMode = modeSelect.value as PermissionMode;
     });
   }
 
@@ -683,7 +686,7 @@ class PromptInputModal extends Modal {
   plugin: OpenClaudeTerminalPlugin;
   cleanupFn: (() => void) | null = null;
   headless = false;
-  yolo = false;
+  permissionMode: PermissionMode = "default";
 
   constructor(app: App, plugin: OpenClaudeTerminalPlugin) {
     super(app);
@@ -717,13 +720,14 @@ class PromptInputModal extends Modal {
       headlessBtn.style.color = this.headless ? "var(--text-on-accent)" : "";
     });
 
-    const yoloBtn = bottomRow.createEl("button", { text: "Yolo" });
-    yoloBtn.style.cssText = "padding:8px 16px;cursor:pointer;font-size:13px;opacity:0.5;border-radius:4px;";
-    yoloBtn.addEventListener("click", () => {
-      this.yolo = !this.yolo;
-      yoloBtn.style.opacity = this.yolo ? "1" : "0.5";
-      yoloBtn.style.background = this.yolo ? "var(--interactive-accent)" : "";
-      yoloBtn.style.color = this.yolo ? "var(--text-on-accent)" : "";
+    const modeSelect = bottomRow.createEl("select");
+    modeSelect.style.cssText = "padding:6px 10px;font-size:13px;border-radius:4px;cursor:pointer;";
+    for (const mode of PERMISSION_MODES) {
+      const opt = modeSelect.createEl("option", { text: mode, value: mode });
+      if (mode === this.permissionMode) opt.selected = true;
+    }
+    modeSelect.addEventListener("change", () => {
+      this.permissionMode = modeSelect.value as PermissionMode;
     });
 
     submitBtn.addEventListener("click", () => {
@@ -734,9 +738,9 @@ class PromptInputModal extends Modal {
       }
       this.close();
       if (this.headless) {
-        this.plugin.runClaudeHeadless(prompt, this.yolo);
+        this.plugin.runClaudeHeadless(prompt, this.permissionMode);
       } else {
-        this.plugin.spawnClaudeWithPrompt(prompt, this.yolo);
+        this.plugin.spawnClaudeWithPrompt(prompt, this.permissionMode);
       }
     });
   }

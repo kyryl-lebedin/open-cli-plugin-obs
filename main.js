@@ -37,6 +37,7 @@ var import_child_process = require("child_process");
 var path = __toESM(require("path"));
 var fs = __toESM(require("fs"));
 var os = __toESM(require("os"));
+var PERMISSION_MODES = ["default", "plan", "acceptEdits", "bypassPermissions"];
 var DEFAULT_SETTINGS = {
   enableClaude: true,
   enableCursor: true,
@@ -119,7 +120,7 @@ var OpenClaudeTerminalPlugin = class extends import_obsidian.Plugin {
       }
     });
   }
-  async spawnClaudeWithPrompt(prompt, yolo = false) {
+  async spawnClaudeWithPrompt(prompt, permissionMode = "default") {
     var _a, _b;
     const file = this.app.workspace.getActiveFile();
     if (!file) {
@@ -143,7 +144,7 @@ var OpenClaudeTerminalPlugin = class extends import_obsidian.Plugin {
       `cd "${dirPath.replace(/"/g, '\\"')}"`,
       `prompt=$(cat "${tmpPrompt.replace(/"/g, '\\"')}")`,
       `rm -f "${tmpPrompt.replace(/"/g, '\\"')}" "${tmpScript.replace(/"/g, '\\"')}"`,
-      `claude${yolo ? " --dangerously-skip-permissions" : ""} "$prompt"`,
+      `claude${permissionMode !== "default" ? ` --permission-mode ${permissionMode}` : ""} "$prompt"`,
       `exec bash`
     ].join("\n"), "utf-8");
     fs.chmodSync(tmpScript, "755");
@@ -153,7 +154,7 @@ var OpenClaudeTerminalPlugin = class extends import_obsidian.Plugin {
       }
     });
   }
-  async runClaudeHeadless(prompt, yolo = false) {
+  async runClaudeHeadless(prompt, permissionMode = "default") {
     var _a, _b;
     const file = this.app.workspace.getActiveFile();
     if (!file) {
@@ -179,7 +180,7 @@ var OpenClaudeTerminalPlugin = class extends import_obsidian.Plugin {
       `source ~/.bashrc 2>/dev/null || source ~/.profile 2>/dev/null || true`,
       `export PATH="$HOME/.local/bin:$HOME/.nvm/versions/node/$(ls $HOME/.nvm/versions/node/ 2>/dev/null | tail -1)/bin:$PATH"`,
       `cd "${dirPath.replace(/"/g, '\\"')}"`,
-      `cat "${tmpPrompt.replace(/"/g, '\\"')}" | claude -p${yolo ? " --dangerously-skip-permissions" : ""} > "${tmpOutput.replace(/"/g, '\\"')}" 2>&1`,
+      `cat "${tmpPrompt.replace(/"/g, '\\"')}" | claude -p${permissionMode !== "default" ? ` --permission-mode ${permissionMode}` : ""} > "${tmpOutput.replace(/"/g, '\\"')}" 2>&1`,
       `rm -f "${tmpPrompt.replace(/"/g, '\\"')}" "${tmpScript.replace(/"/g, '\\"')}"`
     ].join("\n"), "utf-8");
     fs.chmodSync(tmpScript, "755");
@@ -349,7 +350,7 @@ var LauncherModal = class extends import_obsidian.Modal {
   constructor(app, plugin) {
     super(app);
     this.headless = false;
-    this.yolo = false;
+    this.permissionMode = "default";
     this.plugin = plugin;
   }
   onOpen() {
@@ -380,9 +381,9 @@ var LauncherModal = class extends import_obsidian.Modal {
       tplBtn.addEventListener("click", () => {
         this.close();
         if (this.headless) {
-          this.plugin.runClaudeHeadless(tpl.prompt, this.yolo);
+          this.plugin.runClaudeHeadless(tpl.prompt, this.permissionMode);
         } else {
-          this.plugin.spawnClaudeWithPrompt(tpl.prompt, this.yolo);
+          this.plugin.spawnClaudeWithPrompt(tpl.prompt, this.permissionMode);
         }
       });
       const editBtn = row.createEl("button", { text: "\u270E" });
@@ -417,13 +418,14 @@ var LauncherModal = class extends import_obsidian.Modal {
       headlessBtn.style.background = this.headless ? "var(--interactive-accent)" : "";
       headlessBtn.style.color = this.headless ? "var(--text-on-accent)" : "";
     });
-    const yoloBtn = bottomRow.createEl("button", { text: "Yolo" });
-    yoloBtn.style.cssText = "padding:8px 16px;cursor:pointer;font-size:13px;border-radius:4px;" + (this.yolo ? "opacity:1;background:var(--interactive-accent);color:var(--text-on-accent);" : "opacity:0.5;");
-    yoloBtn.addEventListener("click", () => {
-      this.yolo = !this.yolo;
-      yoloBtn.style.opacity = this.yolo ? "1" : "0.5";
-      yoloBtn.style.background = this.yolo ? "var(--interactive-accent)" : "";
-      yoloBtn.style.color = this.yolo ? "var(--text-on-accent)" : "";
+    const modeSelect = bottomRow.createEl("select");
+    modeSelect.style.cssText = "padding:6px 10px;font-size:13px;border-radius:4px;cursor:pointer;";
+    for (const mode of PERMISSION_MODES) {
+      const opt = modeSelect.createEl("option", { text: mode, value: mode });
+      if (mode === this.permissionMode) opt.selected = true;
+    }
+    modeSelect.addEventListener("change", () => {
+      this.permissionMode = modeSelect.value;
     });
   }
   getAgentsFromFrontmatter(file) {
@@ -600,7 +602,7 @@ var PromptInputModal = class extends import_obsidian.Modal {
     super(app);
     this.cleanupFn = null;
     this.headless = false;
-    this.yolo = false;
+    this.permissionMode = "default";
     this.plugin = plugin;
   }
   onOpen() {
@@ -625,13 +627,14 @@ var PromptInputModal = class extends import_obsidian.Modal {
       headlessBtn.style.background = this.headless ? "var(--interactive-accent)" : "";
       headlessBtn.style.color = this.headless ? "var(--text-on-accent)" : "";
     });
-    const yoloBtn = bottomRow.createEl("button", { text: "Yolo" });
-    yoloBtn.style.cssText = "padding:8px 16px;cursor:pointer;font-size:13px;opacity:0.5;border-radius:4px;";
-    yoloBtn.addEventListener("click", () => {
-      this.yolo = !this.yolo;
-      yoloBtn.style.opacity = this.yolo ? "1" : "0.5";
-      yoloBtn.style.background = this.yolo ? "var(--interactive-accent)" : "";
-      yoloBtn.style.color = this.yolo ? "var(--text-on-accent)" : "";
+    const modeSelect = bottomRow.createEl("select");
+    modeSelect.style.cssText = "padding:6px 10px;font-size:13px;border-radius:4px;cursor:pointer;";
+    for (const mode of PERMISSION_MODES) {
+      const opt = modeSelect.createEl("option", { text: mode, value: mode });
+      if (mode === this.permissionMode) opt.selected = true;
+    }
+    modeSelect.addEventListener("change", () => {
+      this.permissionMode = modeSelect.value;
     });
     submitBtn.addEventListener("click", () => {
       const prompt = textArea.getValue().trim();
@@ -641,9 +644,9 @@ var PromptInputModal = class extends import_obsidian.Modal {
       }
       this.close();
       if (this.headless) {
-        this.plugin.runClaudeHeadless(prompt, this.yolo);
+        this.plugin.runClaudeHeadless(prompt, this.permissionMode);
       } else {
-        this.plugin.spawnClaudeWithPrompt(prompt, this.yolo);
+        this.plugin.spawnClaudeWithPrompt(prompt, this.permissionMode);
       }
     });
   }
