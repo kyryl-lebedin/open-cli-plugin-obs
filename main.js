@@ -150,6 +150,75 @@ var OpenClaudeTerminalPlugin = class extends import_obsidian.Plugin {
       }
     });
   }
+  async runClaudeHeadless(prompt) {
+    var _a, _b;
+    const file = this.app.workspace.getActiveFile();
+    if (!file) {
+      new import_obsidian.Notice("No active file");
+      return;
+    }
+    const adapter = this.app.vault.adapter;
+    if (!(adapter instanceof import_obsidian.FileSystemAdapter)) {
+      new import_obsidian.Notice("Cannot resolve vault path");
+      return;
+    }
+    const resolved = await this.resolvePlaceholders(prompt, file);
+    const vaultPath = adapter.getBasePath();
+    const dirPath = path.join(vaultPath, (_b = (_a = file.parent) == null ? void 0 : _a.path) != null ? _b : "");
+    new import_obsidian.Notice("Running Claude headless...");
+    const ts = Date.now();
+    const tmpPrompt = path.join(os.tmpdir(), `claude-prompt-${ts}.txt`);
+    const tmpOutput = path.join(os.tmpdir(), `claude-output-${ts}.txt`);
+    const tmpScript = path.join(os.tmpdir(), `claude-headless-${ts}.sh`);
+    fs.writeFileSync(tmpPrompt, resolved, "utf-8");
+    fs.writeFileSync(tmpScript, [
+      "#!/bin/bash",
+      `source ~/.bashrc 2>/dev/null || source ~/.profile 2>/dev/null || true`,
+      `export PATH="$HOME/.local/bin:$HOME/.nvm/versions/node/$(ls $HOME/.nvm/versions/node/ 2>/dev/null | tail -1)/bin:$PATH"`,
+      `cd "${dirPath.replace(/"/g, '\\"')}"`,
+      `cat "${tmpPrompt.replace(/"/g, '\\"')}" | claude -p > "${tmpOutput.replace(/"/g, '\\"')}" 2>&1`,
+      `rm -f "${tmpPrompt.replace(/"/g, '\\"')}" "${tmpScript.replace(/"/g, '\\"')}"`
+    ].join("\n"), "utf-8");
+    fs.chmodSync(tmpScript, "755");
+    const self = this;
+    const sourceFile = file;
+    const resolvedPrompt = resolved;
+    (0, import_child_process.exec)(`bash "${tmpScript}"`, { maxBuffer: 10 * 1024 * 1024, timeout: 3e5 }, (err) => {
+      (async () => {
+        var _a2, _b2;
+        try {
+          let response = "";
+          try {
+            response = fs.readFileSync(tmpOutput, "utf-8").trim();
+            fs.unlinkSync(tmpOutput);
+          } catch (e) {
+          }
+          if (!response && err) {
+            response = `Error: ${err.message}`;
+          } else if (!response) {
+            response = "No output from Claude";
+          }
+          const words = prompt.split(/\s+/).filter(Boolean);
+          const slug = words.slice(0, 5).join(" ") + (words.length > 5 ? "..." : "");
+          const safeSlug = slug.replace(/[\\/:*?"<>|#^[\]]/g, "").trim();
+          const ts2 = Date.now();
+          const noteName = `claude - ${safeSlug} ${ts2}`;
+          const noteContent = `**User:** ${resolvedPrompt}
+
+**Response:** ${response}`;
+          const folderPath = (_b2 = (_a2 = sourceFile.parent) == null ? void 0 : _a2.path) != null ? _b2 : "";
+          const notePath = folderPath ? `${folderPath}/${noteName}.md` : `${noteName}.md`;
+          await self.app.vault.create(notePath, noteContent);
+          const currentContent = await self.app.vault.read(sourceFile);
+          await self.app.vault.modify(sourceFile, currentContent + `
+[[${noteName}]]`);
+          new import_obsidian.Notice("Claude response saved");
+        } catch (e) {
+          new import_obsidian.Notice(`Headless error: ${e.message}`);
+        }
+      })();
+    });
+  }
   async resolvePlaceholders(prompt, file) {
     let result = prompt;
     const title = file.basename;
@@ -276,6 +345,7 @@ function createPromptTextArea(app, container, placeholder, initialValue) {
 var LauncherModal = class extends import_obsidian.Modal {
   constructor(app, plugin) {
     super(app);
+    this.headless = false;
     this.plugin = plugin;
   }
   onOpen() {
@@ -299,7 +369,11 @@ var LauncherModal = class extends import_obsidian.Modal {
       tplBtn.style.cssText = "flex:1;padding:10px;cursor:pointer;font-size:14px;text-align:left;";
       tplBtn.addEventListener("click", () => {
         this.close();
-        this.plugin.spawnClaudeWithPrompt(tpl.prompt);
+        if (this.headless) {
+          this.plugin.runClaudeHeadless(tpl.prompt);
+        } else {
+          this.plugin.spawnClaudeWithPrompt(tpl.prompt);
+        }
       });
       const editBtn = row.createEl("button", { text: "\u270E" });
       editBtn.style.cssText = "padding:6px 10px;cursor:pointer;font-size:14px;";
@@ -317,11 +391,21 @@ var LauncherModal = class extends import_obsidian.Modal {
         this.render();
       });
     }
-    const addBtn = contentEl.createEl("button", { text: "+ Add template" });
-    addBtn.style.cssText = "width:100%;padding:10px;cursor:pointer;font-size:14px;margin-top:6px;opacity:0.7;";
+    const bottomRow = contentEl.createDiv();
+    bottomRow.style.cssText = "display:flex;align-items:center;gap:8px;margin-top:10px;";
+    const addBtn = bottomRow.createEl("button", { text: "+ Add template" });
+    addBtn.style.cssText = "flex:1;padding:10px;cursor:pointer;font-size:14px;opacity:0.7;";
     addBtn.addEventListener("click", () => {
       this.close();
       new AddTemplateOptionsModal(this.app, this.plugin).open();
+    });
+    const headlessBtn = bottomRow.createEl("button", { text: "Headless" });
+    headlessBtn.style.cssText = "padding:8px 16px;cursor:pointer;font-size:13px;border-radius:4px;" + (this.headless ? "opacity:1;background:var(--interactive-accent);color:var(--text-on-accent);" : "opacity:0.5;");
+    headlessBtn.addEventListener("click", () => {
+      this.headless = !this.headless;
+      headlessBtn.style.opacity = this.headless ? "1" : "0.5";
+      headlessBtn.style.background = this.headless ? "var(--interactive-accent)" : "";
+      headlessBtn.style.color = this.headless ? "var(--text-on-accent)" : "";
     });
   }
   onClose() {
@@ -443,6 +527,7 @@ var PromptInputModal = class extends import_obsidian.Modal {
   constructor(app, plugin) {
     super(app);
     this.cleanupFn = null;
+    this.headless = false;
     this.plugin = plugin;
   }
   onOpen() {
@@ -455,8 +540,18 @@ var PromptInputModal = class extends import_obsidian.Modal {
     const { textArea, cleanup } = createPromptTextArea(this.app, contentEl, "Type your prompt... (@ for files, {{title}} / {{note}} for current note)");
     textArea.inputEl.style.minHeight = "100px";
     this.cleanupFn = cleanup;
-    const submitBtn = contentEl.createEl("button", { text: "Run" });
-    submitBtn.style.cssText = "margin-top:10px;padding:8px 20px;cursor:pointer;font-size:14px;";
+    const bottomRow = contentEl.createDiv();
+    bottomRow.style.cssText = "display:flex;align-items:center;gap:10px;margin-top:10px;";
+    const submitBtn = bottomRow.createEl("button", { text: "Run" });
+    submitBtn.style.cssText = "padding:8px 20px;cursor:pointer;font-size:14px;";
+    const headlessBtn = bottomRow.createEl("button", { text: "Headless" });
+    headlessBtn.style.cssText = "padding:8px 16px;cursor:pointer;font-size:13px;opacity:0.5;border-radius:4px;";
+    headlessBtn.addEventListener("click", () => {
+      this.headless = !this.headless;
+      headlessBtn.style.opacity = this.headless ? "1" : "0.5";
+      headlessBtn.style.background = this.headless ? "var(--interactive-accent)" : "";
+      headlessBtn.style.color = this.headless ? "var(--text-on-accent)" : "";
+    });
     submitBtn.addEventListener("click", () => {
       const prompt = textArea.getValue().trim();
       if (!prompt) {
@@ -464,7 +559,11 @@ var PromptInputModal = class extends import_obsidian.Modal {
         return;
       }
       this.close();
-      this.plugin.spawnClaudeWithPrompt(prompt);
+      if (this.headless) {
+        this.plugin.runClaudeHeadless(prompt);
+      } else {
+        this.plugin.spawnClaudeWithPrompt(prompt);
+      }
     });
   }
   onClose() {

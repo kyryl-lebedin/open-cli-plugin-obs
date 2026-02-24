@@ -148,6 +148,87 @@ export default class OpenClaudeTerminalPlugin extends Plugin {
     });
   }
 
+  async runClaudeHeadless(prompt: string) {
+    const file = this.app.workspace.getActiveFile();
+    if (!file) {
+      new Notice("No active file");
+      return;
+    }
+
+    const adapter = this.app.vault.adapter;
+    if (!(adapter instanceof FileSystemAdapter)) {
+      new Notice("Cannot resolve vault path");
+      return;
+    }
+
+    const resolved = await this.resolvePlaceholders(prompt, file);
+    const vaultPath = adapter.getBasePath();
+    const dirPath = path.join(vaultPath, file.parent?.path ?? "");
+
+    new Notice("Running Claude headless...");
+
+    const ts = Date.now();
+    const tmpPrompt = path.join(os.tmpdir(), `claude-prompt-${ts}.txt`);
+    const tmpOutput = path.join(os.tmpdir(), `claude-output-${ts}.txt`);
+    const tmpScript = path.join(os.tmpdir(), `claude-headless-${ts}.sh`);
+
+    fs.writeFileSync(tmpPrompt, resolved, "utf-8");
+    fs.writeFileSync(tmpScript, [
+      "#!/bin/bash",
+      `source ~/.bashrc 2>/dev/null || source ~/.profile 2>/dev/null || true`,
+      `export PATH="$HOME/.local/bin:$HOME/.nvm/versions/node/$(ls $HOME/.nvm/versions/node/ 2>/dev/null | tail -1)/bin:$PATH"`,
+      `cd "${dirPath.replace(/"/g, '\\"')}"`,
+      `cat "${tmpPrompt.replace(/"/g, '\\"')}" | claude -p > "${tmpOutput.replace(/"/g, '\\"')}" 2>&1`,
+      `rm -f "${tmpPrompt.replace(/"/g, '\\"')}" "${tmpScript.replace(/"/g, '\\"')}"`,
+    ].join("\n"), "utf-8");
+    fs.chmodSync(tmpScript, "755");
+
+    const self = this;
+    const sourceFile = file;
+    const resolvedPrompt = resolved;
+
+    exec(`bash "${tmpScript}"`, { maxBuffer: 10 * 1024 * 1024, timeout: 300000 }, (err) => {
+      // Wrap async work to avoid swallowed promise rejections
+      (async () => {
+        try {
+          let response = "";
+          try {
+            response = fs.readFileSync(tmpOutput, "utf-8").trim();
+            fs.unlinkSync(tmpOutput);
+          } catch {
+            // file doesn't exist or can't be read
+          }
+
+          if (!response && err) {
+            response = `Error: ${err.message}`;
+          } else if (!response) {
+            response = "No output from Claude";
+          }
+
+          // Create response note with unique name
+          const words = prompt.split(/\s+/).filter(Boolean);
+          const slug = words.slice(0, 5).join(" ") + (words.length > 5 ? "..." : "");
+          const safeSlug = slug.replace(/[\\/:*?"<>|#^[\]]/g, "").trim();
+          const ts = Date.now();
+          const noteName = `claude - ${safeSlug} ${ts}`;
+          const noteContent = `**User:** ${resolvedPrompt}\n\n**Response:** ${response}`;
+          const folderPath = sourceFile.parent?.path ?? "";
+          const notePath = folderPath ? `${folderPath}/${noteName}.md` : `${noteName}.md`;
+
+          await self.app.vault.create(notePath, noteContent);
+
+          // Append wiki link to source note
+          const currentContent = await self.app.vault.read(sourceFile);
+          await self.app.vault.modify(sourceFile, currentContent + `\n[[${noteName}]]`);
+
+          new Notice("Claude response saved");
+        } catch (e: any) {
+          new Notice(`Headless error: ${e.message}`);
+        }
+      })();
+    });
+  }
+
   async resolvePlaceholders(prompt: string, file: import("obsidian").TFile): Promise<string> {
     let result = prompt;
     const title = file.basename;
@@ -308,6 +389,8 @@ class LauncherModal extends Modal {
     this.render();
   }
 
+  headless = false;
+
   render() {
     const { contentEl } = this;
     contentEl.empty();
@@ -332,7 +415,11 @@ class LauncherModal extends Modal {
       tplBtn.style.cssText = "flex:1;padding:10px;cursor:pointer;font-size:14px;text-align:left;";
       tplBtn.addEventListener("click", () => {
         this.close();
-        this.plugin.spawnClaudeWithPrompt(tpl.prompt);
+        if (this.headless) {
+          this.plugin.runClaudeHeadless(tpl.prompt);
+        } else {
+          this.plugin.spawnClaudeWithPrompt(tpl.prompt);
+        }
       });
 
       const editBtn = row.createEl("button", { text: "\u270E" });
@@ -353,12 +440,25 @@ class LauncherModal extends Modal {
       });
     }
 
-    // Add template button at the bottom
-    const addBtn = contentEl.createEl("button", { text: "+ Add template" });
-    addBtn.style.cssText = "width:100%;padding:10px;cursor:pointer;font-size:14px;margin-top:6px;opacity:0.7;";
+    // Bottom row: add template + headless toggle
+    const bottomRow = contentEl.createDiv();
+    bottomRow.style.cssText = "display:flex;align-items:center;gap:8px;margin-top:10px;";
+
+    const addBtn = bottomRow.createEl("button", { text: "+ Add template" });
+    addBtn.style.cssText = "flex:1;padding:10px;cursor:pointer;font-size:14px;opacity:0.7;";
     addBtn.addEventListener("click", () => {
       this.close();
       new AddTemplateOptionsModal(this.app, this.plugin).open();
+    });
+
+    const headlessBtn = bottomRow.createEl("button", { text: "Headless" });
+    headlessBtn.style.cssText = "padding:8px 16px;cursor:pointer;font-size:13px;border-radius:4px;" +
+      (this.headless ? "opacity:1;background:var(--interactive-accent);color:var(--text-on-accent);" : "opacity:0.5;");
+    headlessBtn.addEventListener("click", () => {
+      this.headless = !this.headless;
+      headlessBtn.style.opacity = this.headless ? "1" : "0.5";
+      headlessBtn.style.background = this.headless ? "var(--interactive-accent)" : "";
+      headlessBtn.style.color = this.headless ? "var(--text-on-accent)" : "";
     });
   }
 
@@ -505,6 +605,7 @@ class EditTemplateModal extends Modal {
 class PromptInputModal extends Modal {
   plugin: OpenClaudeTerminalPlugin;
   cleanupFn: (() => void) | null = null;
+  headless = false;
 
   constructor(app: App, plugin: OpenClaudeTerminalPlugin) {
     super(app);
@@ -523,8 +624,21 @@ class PromptInputModal extends Modal {
     textArea.inputEl.style.minHeight = "100px";
     this.cleanupFn = cleanup;
 
-    const submitBtn = contentEl.createEl("button", { text: "Run" });
-    submitBtn.style.cssText = "margin-top:10px;padding:8px 20px;cursor:pointer;font-size:14px;";
+    const bottomRow = contentEl.createDiv();
+    bottomRow.style.cssText = "display:flex;align-items:center;gap:10px;margin-top:10px;";
+
+    const submitBtn = bottomRow.createEl("button", { text: "Run" });
+    submitBtn.style.cssText = "padding:8px 20px;cursor:pointer;font-size:14px;";
+
+    const headlessBtn = bottomRow.createEl("button", { text: "Headless" });
+    headlessBtn.style.cssText = "padding:8px 16px;cursor:pointer;font-size:13px;opacity:0.5;border-radius:4px;";
+    headlessBtn.addEventListener("click", () => {
+      this.headless = !this.headless;
+      headlessBtn.style.opacity = this.headless ? "1" : "0.5";
+      headlessBtn.style.background = this.headless ? "var(--interactive-accent)" : "";
+      headlessBtn.style.color = this.headless ? "var(--text-on-accent)" : "";
+    });
+
     submitBtn.addEventListener("click", () => {
       const prompt = textArea.getValue().trim();
       if (!prompt) {
@@ -532,7 +646,11 @@ class PromptInputModal extends Modal {
         return;
       }
       this.close();
-      this.plugin.spawnClaudeWithPrompt(prompt);
+      if (this.headless) {
+        this.plugin.runClaudeHeadless(prompt);
+      } else {
+        this.plugin.spawnClaudeWithPrompt(prompt);
+      }
     });
   }
 
