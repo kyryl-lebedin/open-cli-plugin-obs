@@ -287,17 +287,7 @@ class LauncherModal extends Modal {
     const { contentEl } = this;
     contentEl.empty();
 
-    // Header row with title and + button
-    const header = contentEl.createDiv();
-    header.style.cssText = "display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;";
-    header.createEl("h3", { text: "Claude Launcher" }).style.margin = "0";
-
-    const addBtn = header.createEl("button", { text: "+" });
-    addBtn.style.cssText = "font-size:18px;width:32px;height:32px;cursor:pointer;display:flex;align-items:center;justify-content:center;border-radius:6px;";
-    addBtn.addEventListener("click", () => {
-      this.close();
-      new AddTemplateOptionsModal(this.app, this.plugin).open();
-    });
+    contentEl.createEl("h3", { text: "Claude Launcher" });
 
     // Custom prompt button
     const list = contentEl.createDiv();
@@ -337,6 +327,14 @@ class LauncherModal extends Modal {
         this.render();
       });
     }
+
+    // Add template button at the bottom
+    const addBtn = contentEl.createEl("button", { text: "+ Add template" });
+    addBtn.style.cssText = "width:100%;padding:10px;cursor:pointer;font-size:14px;margin-top:6px;opacity:0.7;";
+    addBtn.addEventListener("click", () => {
+      this.close();
+      new AddTemplateOptionsModal(this.app, this.plugin).open();
+    });
   }
 
   onClose() {
@@ -355,6 +353,14 @@ class AddTemplateOptionsModal extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
+
+    const backBtn = contentEl.createEl("button", { text: "\u2190 Back" });
+    backBtn.style.cssText = "padding:4px 12px;cursor:pointer;font-size:13px;margin-bottom:10px;";
+    backBtn.addEventListener("click", () => {
+      this.close();
+      new LauncherModal(this.app, this.plugin).open();
+    });
+
     contentEl.createEl("h3", { text: "Add new..." });
 
     const btn = contentEl.createEl("button", { text: "Fixed prompt template" });
@@ -381,6 +387,13 @@ class AddTemplateModal extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
+    const backBtn = contentEl.createEl("button", { text: "\u2190 Back" });
+    backBtn.style.cssText = "padding:4px 12px;cursor:pointer;font-size:13px;margin-bottom:10px;";
+    backBtn.addEventListener("click", () => {
+      this.close();
+      new LauncherModal(this.app, this.plugin).open();
+    });
+
     contentEl.createEl("h3", { text: "New prompt template" });
 
     contentEl.createEl("label", { text: "Name" }).style.cssText = "font-size:13px;font-weight:600;";
@@ -433,6 +446,13 @@ class EditTemplateModal extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
+    const backBtn = contentEl.createEl("button", { text: "\u2190 Back" });
+    backBtn.style.cssText = "padding:4px 12px;cursor:pointer;font-size:13px;margin-bottom:10px;";
+    backBtn.addEventListener("click", () => {
+      this.close();
+      new LauncherModal(this.app, this.plugin).open();
+    });
+
     contentEl.createEl("h3", { text: "Edit template" });
 
     contentEl.createEl("label", { text: "Name" }).style.cssText = "font-size:13px;font-weight:600;";
@@ -481,6 +501,13 @@ class PromptInputModal extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
+    const backBtn = contentEl.createEl("button", { text: "\u2190 Back" });
+    backBtn.style.cssText = "padding:4px 12px;cursor:pointer;font-size:13px;margin-bottom:10px;";
+    backBtn.addEventListener("click", () => {
+      this.close();
+      new LauncherModal(this.app, this.plugin).open();
+    });
+
     contentEl.createEl("h3", { text: "Enter prompt" });
 
     const { textArea, cleanup } = createPromptTextArea(this.app, contentEl, "Type your prompt... (@ for files, {{title}} / {{note}} for current note)");

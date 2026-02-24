@@ -265,15 +265,7 @@ var LauncherModal = class extends import_obsidian.Modal {
   render() {
     const { contentEl } = this;
     contentEl.empty();
-    const header = contentEl.createDiv();
-    header.style.cssText = "display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;";
-    header.createEl("h3", { text: "Claude Launcher" }).style.margin = "0";
-    const addBtn = header.createEl("button", { text: "+" });
-    addBtn.style.cssText = "font-size:18px;width:32px;height:32px;cursor:pointer;display:flex;align-items:center;justify-content:center;border-radius:6px;";
-    addBtn.addEventListener("click", () => {
-      this.close();
-      new AddTemplateOptionsModal(this.app, this.plugin).open();
-    });
+    contentEl.createEl("h3", { text: "Claude Launcher" });
     const list = contentEl.createDiv();
     const customBtn = list.createEl("button", { text: "Custom prompt" });
     customBtn.style.cssText = "width:100%;padding:10px;cursor:pointer;font-size:14px;margin-bottom:6px;";
@@ -306,6 +298,12 @@ var LauncherModal = class extends import_obsidian.Modal {
         this.render();
       });
     }
+    const addBtn = contentEl.createEl("button", { text: "+ Add template" });
+    addBtn.style.cssText = "width:100%;padding:10px;cursor:pointer;font-size:14px;margin-top:6px;opacity:0.7;";
+    addBtn.addEventListener("click", () => {
+      this.close();
+      new AddTemplateOptionsModal(this.app, this.plugin).open();
+    });
   }
   onClose() {
     this.contentEl.empty();
@@ -319,6 +317,12 @@ var AddTemplateOptionsModal = class extends import_obsidian.Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
+    const backBtn = contentEl.createEl("button", { text: "\u2190 Back" });
+    backBtn.style.cssText = "padding:4px 12px;cursor:pointer;font-size:13px;margin-bottom:10px;";
+    backBtn.addEventListener("click", () => {
+      this.close();
+      new LauncherModal(this.app, this.plugin).open();
+    });
     contentEl.createEl("h3", { text: "Add new..." });
     const btn = contentEl.createEl("button", { text: "Fixed prompt template" });
     btn.style.cssText = "width:100%;padding:10px;cursor:pointer;font-size:14px;";
@@ -340,6 +344,12 @@ var AddTemplateModal = class extends import_obsidian.Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
+    const backBtn = contentEl.createEl("button", { text: "\u2190 Back" });
+    backBtn.style.cssText = "padding:4px 12px;cursor:pointer;font-size:13px;margin-bottom:10px;";
+    backBtn.addEventListener("click", () => {
+      this.close();
+      new LauncherModal(this.app, this.plugin).open();
+    });
     contentEl.createEl("h3", { text: "New prompt template" });
     contentEl.createEl("label", { text: "Name" }).style.cssText = "font-size:13px;font-weight:600;";
     const nameInput = contentEl.createEl("input", { type: "text" });
@@ -383,6 +393,12 @@ var EditTemplateModal = class extends import_obsidian.Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
+    const backBtn = contentEl.createEl("button", { text: "\u2190 Back" });
+    backBtn.style.cssText = "padding:4px 12px;cursor:pointer;font-size:13px;margin-bottom:10px;";
+    backBtn.addEventListener("click", () => {
+      this.close();
+      new LauncherModal(this.app, this.plugin).open();
+    });
     contentEl.createEl("h3", { text: "Edit template" });
     contentEl.createEl("label", { text: "Name" }).style.cssText = "font-size:13px;font-weight:600;";
     const nameInput = contentEl.createEl("input", { type: "text" });
@@ -422,6 +438,12 @@ var PromptInputModal = class extends import_obsidian.Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
+    const backBtn = contentEl.createEl("button", { text: "\u2190 Back" });
+    backBtn.style.cssText = "padding:4px 12px;cursor:pointer;font-size:13px;margin-bottom:10px;";
+    backBtn.addEventListener("click", () => {
+      this.close();
+      new LauncherModal(this.app, this.plugin).open();
+    });
     contentEl.createEl("h3", { text: "Enter prompt" });
     const { textArea, cleanup } = createPromptTextArea(this.app, contentEl, "Type your prompt... (@ for files, {{title}} / {{note}} for current note)");
     textArea.inputEl.style.minHeight = "100px";
