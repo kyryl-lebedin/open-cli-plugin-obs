@@ -419,7 +419,7 @@ var LauncherModal = class extends import_obsidian.Modal {
       headlessBtn.style.color = this.headless ? "var(--text-on-accent)" : "";
     });
     const modeSelect = bottomRow.createEl("select");
-    modeSelect.style.cssText = "padding:6px 10px;font-size:13px;border-radius:4px;cursor:pointer;";
+    modeSelect.style.cssText = `padding:6px 28px 6px 10px;font-size:13px;border-radius:4px;cursor:pointer;appearance:none;-webkit-appearance:none;background-color:var(--background-primary);border:1px solid var(--background-modifier-border);background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 8px center;`;
     for (const mode of PERMISSION_MODES) {
       const opt = modeSelect.createEl("option", { text: mode, value: mode });
       if (mode === this.permissionMode) opt.selected = true;
@@ -628,7 +628,7 @@ var PromptInputModal = class extends import_obsidian.Modal {
       headlessBtn.style.color = this.headless ? "var(--text-on-accent)" : "";
     });
     const modeSelect = bottomRow.createEl("select");
-    modeSelect.style.cssText = "padding:6px 10px;font-size:13px;border-radius:4px;cursor:pointer;";
+    modeSelect.style.cssText = `padding:6px 28px 6px 10px;font-size:13px;border-radius:4px;cursor:pointer;appearance:none;-webkit-appearance:none;background-color:var(--background-primary);border:1px solid var(--background-modifier-border);background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 8px center;`;
     for (const mode of PERMISSION_MODES) {
       const opt = modeSelect.createEl("option", { text: mode, value: mode });
       if (mode === this.permissionMode) opt.selected = true;
