@@ -2,14 +2,22 @@ import { Plugin, Notice, FileSystemAdapter, PluginSettingTab, App, Setting, Moda
 import { exec } from "child_process";
 import * as path from "path";
 
+interface PromptTemplate {
+  id: string;
+  name: string;
+  prompt: string;
+}
+
 interface PluginSettings {
   enableClaude: boolean;
   enableCursor: boolean;
+  templates: PromptTemplate[];
 }
 
 const DEFAULT_SETTINGS: PluginSettings = {
   enableClaude: true,
   enableCursor: true,
+  templates: [],
 };
 
 export default class OpenClaudeTerminalPlugin extends Plugin {
@@ -95,7 +103,7 @@ export default class OpenClaudeTerminalPlugin extends Plugin {
     });
   }
 
-  spawnClaudeWithPrompt(prompt: string) {
+  async spawnClaudeWithPrompt(prompt: string) {
     const file = this.app.workspace.getActiveFile();
     if (!file) {
       new Notice("No active file");
@@ -108,9 +116,12 @@ export default class OpenClaudeTerminalPlugin extends Plugin {
       return;
     }
 
+    // Resolve placeholders
+    const resolved = await this.resolvePlaceholders(prompt, file);
+
     const vaultPath = adapter.getBasePath();
     const dirPath = path.join(vaultPath, file.parent?.path ?? "");
-    const escaped = prompt.replace(/'/g, "'\\''");
+    const escaped = resolved.replace(/'/g, "'\\''");
 
     exec(
       `gnome-terminal -- bash -c 'cd "${dirPath}" && claude "${escaped}"; exec bash'`,
@@ -122,6 +133,21 @@ export default class OpenClaudeTerminalPlugin extends Plugin {
     );
   }
 
+  async resolvePlaceholders(prompt: string, file: import("obsidian").TFile): Promise<string> {
+    let result = prompt;
+    const title = file.basename;
+
+    if (result.includes("{{note}}")) {
+      const content = await this.app.vault.read(file);
+      const noteText = `${title}\n\n${content}`;
+      result = result.replace(/\{\{note\}\}/g, noteText);
+    }
+
+    result = result.replace(/\{\{title\}\}/g, title);
+
+    return result;
+  }
+
   async loadSettings() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
   }
@@ -129,6 +155,120 @@ export default class OpenClaudeTerminalPlugin extends Plugin {
   async saveSettings() {
     await this.saveData(this.settings);
   }
+}
+
+// --- Reusable @ autocomplete for any textarea ---
+function getFilesInFolder(app: App): string[] {
+  const file = app.workspace.getActiveFile();
+  if (!file?.parent) return [];
+  return file.parent.children
+    .filter((c) => !(c instanceof TFolder))
+    .map((c) => c.name);
+}
+
+interface MentionState {
+  dropdown: HTMLDivElement | null;
+  mentionStart: number;
+  selectedIndex: number;
+  filteredFiles: string[];
+}
+
+function attachMentionAutocomplete(app: App, wrapper: HTMLDivElement, el: HTMLTextAreaElement) {
+  const state: MentionState = { dropdown: null, mentionStart: -1, selectedIndex: 0, filteredFiles: [] };
+
+  function hideDropdown() {
+    if (state.dropdown) {
+      state.dropdown.remove();
+      state.dropdown = null;
+    }
+    state.mentionStart = -1;
+    state.filteredFiles = [];
+  }
+
+  function selectItem(fileName: string) {
+    const cursor = el.selectionStart;
+    const before = el.value.slice(0, state.mentionStart);
+    const after = el.value.slice(cursor);
+    el.value = before + "@" + fileName + " " + after;
+    const newCursor = before.length + 1 + fileName.length + 1;
+    el.selectionStart = el.selectionEnd = newCursor;
+    el.focus();
+    hideDropdown();
+  }
+
+  function renderItems() {
+    if (!state.dropdown) return;
+    state.dropdown.empty();
+    state.filteredFiles.forEach((f, i) => {
+      const item = state.dropdown!.createDiv();
+      item.textContent = f;
+      item.style.cssText =
+        "padding:6px 10px;cursor:pointer;font-size:13px;" +
+        (i === state.selectedIndex
+          ? "background:var(--interactive-accent);color:var(--text-on-accent);"
+          : "");
+      item.addEventListener("mouseenter", () => { state.selectedIndex = i; renderItems(); });
+      item.addEventListener("click", () => selectItem(f));
+    });
+  }
+
+  function showDropdown() {
+    if (!state.dropdown) {
+      state.dropdown = wrapper.createDiv();
+      state.dropdown.style.cssText =
+        "position:absolute;left:0;right:0;background:var(--background-primary);" +
+        "border:1px solid var(--background-modifier-border);border-radius:6px;" +
+        "max-height:150px;overflow-y:auto;z-index:1000;box-shadow:0 4px 12px rgba(0,0,0,0.2);";
+    }
+    state.dropdown.style.top = el.offsetTop + el.offsetHeight + 4 + "px";
+    renderItems();
+  }
+
+  el.addEventListener("input", () => {
+    const before = el.value.slice(0, el.selectionStart);
+    const atIdx = before.lastIndexOf("@");
+    if (atIdx === -1 || (atIdx > 0 && before[atIdx - 1] !== " " && before[atIdx - 1] !== "\n")) {
+      hideDropdown();
+      return;
+    }
+    const query = before.slice(atIdx + 1).toLowerCase();
+    state.filteredFiles = getFilesInFolder(app).filter((f) => f.toLowerCase().includes(query));
+    state.mentionStart = atIdx;
+    state.selectedIndex = 0;
+    if (state.filteredFiles.length === 0) { hideDropdown(); return; }
+    showDropdown();
+  });
+
+  el.addEventListener("keydown", (e) => {
+    if (!state.dropdown) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      state.selectedIndex = Math.min(state.selectedIndex + 1, state.filteredFiles.length - 1);
+      renderItems();
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      state.selectedIndex = Math.max(state.selectedIndex - 1, 0);
+      renderItems();
+    } else if (e.key === "Tab" || e.key === "Enter") {
+      if (state.filteredFiles.length > 0) { e.preventDefault(); selectItem(state.filteredFiles[state.selectedIndex]); }
+    } else if (e.key === "Escape") {
+      hideDropdown();
+    }
+  });
+
+  return { hideDropdown };
+}
+
+// --- Helper to create a textarea with @ autocomplete inside a container ---
+function createPromptTextArea(app: App, container: HTMLElement, placeholder: string, initialValue?: string): { textArea: TextAreaComponent; cleanup: () => void } {
+  const wrapper = container.createDiv();
+  wrapper.style.position = "relative";
+  const textArea = new TextAreaComponent(wrapper);
+  textArea.inputEl.style.cssText = "width:100%;min-height:80px;font-size:14px;";
+  textArea.setPlaceholder(placeholder);
+  if (initialValue) textArea.setValue(initialValue);
+  const { hideDropdown } = attachMentionAutocomplete(app, wrapper, textArea.inputEl);
+  return { textArea, cleanup: hideDropdown };
 }
 
 class LauncherModal extends Modal {
@@ -140,15 +280,88 @@ class LauncherModal extends Modal {
   }
 
   onOpen() {
+    this.render();
+  }
+
+  render() {
     const { contentEl } = this;
     contentEl.empty();
-    contentEl.createEl("h3", { text: "Claude Launcher" });
 
-    const btn = contentEl.createEl("button", { text: "Custom prompt" });
+    // Header row with title and + button
+    const header = contentEl.createDiv();
+    header.style.cssText = "display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;";
+    header.createEl("h3", { text: "Claude Launcher" }).style.margin = "0";
+
+    const addBtn = header.createEl("button", { text: "+" });
+    addBtn.style.cssText = "font-size:18px;width:32px;height:32px;cursor:pointer;display:flex;align-items:center;justify-content:center;border-radius:6px;";
+    addBtn.addEventListener("click", () => {
+      this.close();
+      new AddTemplateOptionsModal(this.app, this.plugin).open();
+    });
+
+    // Custom prompt button
+    const list = contentEl.createDiv();
+    const customBtn = list.createEl("button", { text: "Custom prompt" });
+    customBtn.style.cssText = "width:100%;padding:10px;cursor:pointer;font-size:14px;margin-bottom:6px;";
+    customBtn.addEventListener("click", () => {
+      this.close();
+      new PromptInputModal(this.app, this.plugin).open();
+    });
+
+    // Saved templates
+    for (const tpl of this.plugin.settings.templates) {
+      const row = list.createDiv();
+      row.style.cssText = "display:flex;align-items:center;gap:4px;margin-bottom:6px;";
+
+      const tplBtn = row.createEl("button", { text: tpl.name });
+      tplBtn.style.cssText = "flex:1;padding:10px;cursor:pointer;font-size:14px;text-align:left;";
+      tplBtn.addEventListener("click", () => {
+        this.close();
+        this.plugin.spawnClaudeWithPrompt(tpl.prompt);
+      });
+
+      const editBtn = row.createEl("button", { text: "\u270E" });
+      editBtn.style.cssText = "padding:6px 10px;cursor:pointer;font-size:14px;";
+      editBtn.title = "Edit template";
+      editBtn.addEventListener("click", () => {
+        this.close();
+        new EditTemplateModal(this.app, this.plugin, tpl).open();
+      });
+
+      const delBtn = row.createEl("button", { text: "\u00D7" });
+      delBtn.style.cssText = "padding:6px 10px;cursor:pointer;font-size:14px;color:var(--text-error);";
+      delBtn.title = "Delete template";
+      delBtn.addEventListener("click", async () => {
+        this.plugin.settings.templates = this.plugin.settings.templates.filter((t) => t.id !== tpl.id);
+        await this.plugin.saveSettings();
+        this.render();
+      });
+    }
+  }
+
+  onClose() {
+    this.contentEl.empty();
+  }
+}
+
+class AddTemplateOptionsModal extends Modal {
+  plugin: OpenClaudeTerminalPlugin;
+
+  constructor(app: App, plugin: OpenClaudeTerminalPlugin) {
+    super(app);
+    this.plugin = plugin;
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl("h3", { text: "Add new..." });
+
+    const btn = contentEl.createEl("button", { text: "Fixed prompt template" });
     btn.style.cssText = "width:100%;padding:10px;cursor:pointer;font-size:14px;";
     btn.addEventListener("click", () => {
       this.close();
-      new PromptInputModal(this.app, this.plugin).open();
+      new AddTemplateModal(this.app, this.plugin).open();
     });
   }
 
@@ -157,25 +370,112 @@ class LauncherModal extends Modal {
   }
 }
 
-class PromptInputModal extends Modal {
+class AddTemplateModal extends Modal {
   plugin: OpenClaudeTerminalPlugin;
-  dropdown: HTMLDivElement | null = null;
-  mentionStart = -1;
-  selectedIndex = 0;
-  filteredFiles: string[] = [];
 
   constructor(app: App, plugin: OpenClaudeTerminalPlugin) {
     super(app);
     this.plugin = plugin;
   }
 
-  getFilesInFolder(): string[] {
-    const file = this.app.workspace.getActiveFile();
-    if (!file?.parent) return [];
-    const folder = file.parent;
-    return folder.children
-      .filter((c) => !(c instanceof TFolder))
-      .map((c) => c.name);
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl("h3", { text: "New prompt template" });
+
+    contentEl.createEl("label", { text: "Name" }).style.cssText = "font-size:13px;font-weight:600;";
+    const nameInput = contentEl.createEl("input", { type: "text" });
+    nameInput.style.cssText = "width:100%;padding:8px;font-size:14px;margin-bottom:10px;";
+    nameInput.placeholder = "Template name";
+
+    contentEl.createEl("label", { text: "Prompt" }).style.cssText = "font-size:13px;font-weight:600;";
+    const { textArea: promptArea, cleanup } = createPromptTextArea(this.app, contentEl, "Enter the prompt... (@ to reference files)");
+    this.cleanupFn = cleanup;
+
+    const saveBtn = contentEl.createEl("button", { text: "Save" });
+    saveBtn.style.cssText = "margin-top:10px;padding:8px 20px;cursor:pointer;font-size:14px;";
+    saveBtn.addEventListener("click", async () => {
+      const name = nameInput.value.trim();
+      const prompt = promptArea.getValue().trim();
+      if (!name || !prompt) {
+        new Notice("Name and prompt are required");
+        return;
+      }
+      this.plugin.settings.templates.push({
+        id: Date.now().toString(),
+        name,
+        prompt,
+      });
+      await this.plugin.saveSettings();
+      this.close();
+      new LauncherModal(this.app, this.plugin).open();
+    });
+  }
+
+  cleanupFn: (() => void) | null = null;
+
+  onClose() {
+    this.cleanupFn?.();
+    this.contentEl.empty();
+  }
+}
+
+class EditTemplateModal extends Modal {
+  plugin: OpenClaudeTerminalPlugin;
+  template: PromptTemplate;
+
+  constructor(app: App, plugin: OpenClaudeTerminalPlugin, template: PromptTemplate) {
+    super(app);
+    this.plugin = plugin;
+    this.template = template;
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl("h3", { text: "Edit template" });
+
+    contentEl.createEl("label", { text: "Name" }).style.cssText = "font-size:13px;font-weight:600;";
+    const nameInput = contentEl.createEl("input", { type: "text" });
+    nameInput.style.cssText = "width:100%;padding:8px;font-size:14px;margin-bottom:10px;";
+    nameInput.value = this.template.name;
+
+    contentEl.createEl("label", { text: "Prompt" }).style.cssText = "font-size:13px;font-weight:600;";
+    const { textArea: promptArea, cleanup } = createPromptTextArea(this.app, contentEl, "Enter the prompt... (@ to reference files)", this.template.prompt);
+    this.cleanupFn = cleanup;
+
+    const saveBtn = contentEl.createEl("button", { text: "Save" });
+    saveBtn.style.cssText = "margin-top:10px;padding:8px 20px;cursor:pointer;font-size:14px;";
+    saveBtn.addEventListener("click", async () => {
+      const name = nameInput.value.trim();
+      const prompt = promptArea.getValue().trim();
+      if (!name || !prompt) {
+        new Notice("Name and prompt are required");
+        return;
+      }
+      this.template.name = name;
+      this.template.prompt = prompt;
+      await this.plugin.saveSettings();
+      this.close();
+      new LauncherModal(this.app, this.plugin).open();
+    });
+  }
+
+  cleanupFn: (() => void) | null = null;
+
+  onClose() {
+    this.cleanupFn?.();
+    this.contentEl.empty();
+  }
+}
+
+class PromptInputModal extends Modal {
+  plugin: OpenClaudeTerminalPlugin;
+  cleanupFn: (() => void) | null = null;
+
+  constructor(app: App, plugin: OpenClaudeTerminalPlugin) {
+    super(app);
+    this.plugin = plugin;
   }
 
   onOpen() {
@@ -183,16 +483,9 @@ class PromptInputModal extends Modal {
     contentEl.empty();
     contentEl.createEl("h3", { text: "Enter prompt" });
 
-    const wrapper = contentEl.createDiv();
-    wrapper.style.position = "relative";
-
-    const textArea = new TextAreaComponent(wrapper);
-    const el = textArea.inputEl;
-    el.style.cssText = "width:100%;min-height:100px;font-size:14px;";
-    textArea.setPlaceholder("Type your prompt for Claude... (@ to reference files)");
-
-    el.addEventListener("input", () => this.handleInput(el));
-    el.addEventListener("keydown", (e) => this.handleKeydown(e, el));
+    const { textArea, cleanup } = createPromptTextArea(this.app, contentEl, "Type your prompt... (@ for files, {{title}} / {{note}} for current note)");
+    textArea.inputEl.style.minHeight = "100px";
+    this.cleanupFn = cleanup;
 
     const submitBtn = contentEl.createEl("button", { text: "Run" });
     submitBtn.style.cssText = "margin-top:10px;padding:8px 20px;cursor:pointer;font-size:14px;";
@@ -207,112 +500,8 @@ class PromptInputModal extends Modal {
     });
   }
 
-  handleInput(el: HTMLTextAreaElement) {
-    const val = el.value;
-    const cursor = el.selectionStart;
-
-    // Find the @ before cursor
-    const before = val.slice(0, cursor);
-    const atIdx = before.lastIndexOf("@");
-
-    if (atIdx === -1 || (atIdx > 0 && before[atIdx - 1] !== " " && before[atIdx - 1] !== "\n")) {
-      this.hideDropdown();
-      return;
-    }
-
-    const query = before.slice(atIdx + 1).toLowerCase();
-    const allFiles = this.getFilesInFolder();
-    this.filteredFiles = allFiles.filter((f) => f.toLowerCase().includes(query));
-    this.mentionStart = atIdx;
-    this.selectedIndex = 0;
-
-    if (this.filteredFiles.length === 0) {
-      this.hideDropdown();
-      return;
-    }
-
-    this.showDropdown(el);
-  }
-
-  handleKeydown(e: KeyboardEvent, el: HTMLTextAreaElement) {
-    if (!this.dropdown) return;
-
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      this.selectedIndex = Math.min(this.selectedIndex + 1, this.filteredFiles.length - 1);
-      this.renderDropdownItems();
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      this.selectedIndex = Math.max(this.selectedIndex - 1, 0);
-      this.renderDropdownItems();
-    } else if (e.key === "Tab" || e.key === "Enter") {
-      if (this.filteredFiles.length > 0) {
-        e.preventDefault();
-        this.selectItem(el, this.filteredFiles[this.selectedIndex]);
-      }
-    } else if (e.key === "Escape") {
-      this.hideDropdown();
-    }
-  }
-
-  selectItem(el: HTMLTextAreaElement, fileName: string) {
-    const cursor = el.selectionStart;
-    const before = el.value.slice(0, this.mentionStart);
-    const after = el.value.slice(cursor);
-    el.value = before + "@" + fileName + " " + after;
-    const newCursor = before.length + 1 + fileName.length + 1;
-    el.selectionStart = el.selectionEnd = newCursor;
-    el.focus();
-    this.hideDropdown();
-  }
-
-  showDropdown(el: HTMLTextAreaElement) {
-    if (!this.dropdown) {
-      this.dropdown = el.parentElement!.createDiv();
-      this.dropdown.style.cssText =
-        "position:absolute;left:0;right:0;background:var(--background-primary);" +
-        "border:1px solid var(--background-modifier-border);border-radius:6px;" +
-        "max-height:150px;overflow-y:auto;z-index:1000;box-shadow:0 4px 12px rgba(0,0,0,0.2);";
-    }
-    // Position below textarea
-    this.dropdown.style.top = el.offsetTop + el.offsetHeight + 4 + "px";
-    this.renderDropdownItems();
-  }
-
-  renderDropdownItems() {
-    if (!this.dropdown) return;
-    this.dropdown.empty();
-    const textArea = this.dropdown.parentElement?.querySelector("textarea");
-
-    this.filteredFiles.forEach((f, i) => {
-      const item = this.dropdown!.createDiv();
-      item.textContent = f;
-      item.style.cssText =
-        "padding:6px 10px;cursor:pointer;font-size:13px;" +
-        (i === this.selectedIndex
-          ? "background:var(--interactive-accent);color:var(--text-on-accent);"
-          : "");
-      item.addEventListener("mouseenter", () => {
-        this.selectedIndex = i;
-        this.renderDropdownItems();
-      });
-      item.addEventListener("click", () => {
-        if (textArea) this.selectItem(textArea, f);
-      });
-    });
-  }
-
-  hideDropdown() {
-    if (this.dropdown) {
-      this.dropdown.remove();
-      this.dropdown = null;
-    }
-    this.mentionStart = -1;
-    this.filteredFiles = [];
-  }
-
   onClose() {
-    this.hideDropdown();
+    this.cleanupFn?.();
     this.contentEl.empty();
   }
 }
