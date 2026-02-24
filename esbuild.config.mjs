@@ -7,7 +7,7 @@ esbuild
   .build({
     entryPoints: ["main.ts"],
     bundle: true,
-    external: ["obsidian", "electron", "child_process", "path"],
+    external: ["obsidian", "electron", "child_process", "path", "fs", "os"],
     format: "cjs",
     target: "es2018",
     logLevel: "info",

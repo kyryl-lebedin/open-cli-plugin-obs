@@ -1,6 +1,8 @@
 import { Plugin, Notice, FileSystemAdapter, PluginSettingTab, App, Setting, Modal, TextAreaComponent, TFolder } from "obsidian";
 import { exec } from "child_process";
 import * as path from "path";
+import * as fs from "fs";
+import * as os from "os";
 
 interface PromptTemplate {
   id: string;
@@ -121,16 +123,29 @@ export default class OpenClaudeTerminalPlugin extends Plugin {
 
     const vaultPath = adapter.getBasePath();
     const dirPath = path.join(vaultPath, file.parent?.path ?? "");
-    const escaped = resolved.replace(/'/g, "'\\''");
 
-    exec(
-      `gnome-terminal -- bash -c 'cd "${dirPath}" && claude "${escaped}"; exec bash'`,
-      (err) => {
-        if (err) {
-          new Notice(`Failed to open terminal: ${err.message}`);
-        }
+    // Write prompt to temp file, then write a launcher script
+    // that reads it safely via variable assignment (no shell reinterpretation)
+    const ts = Date.now();
+    const tmpPrompt = path.join(os.tmpdir(), `claude-prompt-${ts}.txt`);
+    const tmpScript = path.join(os.tmpdir(), `claude-launch-${ts}.sh`);
+
+    fs.writeFileSync(tmpPrompt, resolved, "utf-8");
+    fs.writeFileSync(tmpScript, [
+      "#!/bin/bash",
+      `cd "${dirPath.replace(/"/g, '\\"')}"`,
+      `prompt=$(cat "${tmpPrompt.replace(/"/g, '\\"')}")`,
+      `rm -f "${tmpPrompt.replace(/"/g, '\\"')}" "${tmpScript.replace(/"/g, '\\"')}"`,
+      `claude "$prompt"`,
+      `exec bash`,
+    ].join("\n"), "utf-8");
+    fs.chmodSync(tmpScript, "755");
+
+    exec(`gnome-terminal -- bash "${tmpScript}"`, (err) => {
+      if (err) {
+        new Notice(`Failed to open terminal: ${err.message}`);
       }
-    );
+    });
   }
 
   async resolvePlaceholders(prompt: string, file: import("obsidian").TFile): Promise<string> {

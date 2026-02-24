@@ -35,6 +35,8 @@ module.exports = __toCommonJS(main_exports);
 var import_obsidian = require("obsidian");
 var import_child_process = require("child_process");
 var path = __toESM(require("path"));
+var fs = __toESM(require("fs"));
+var os = __toESM(require("os"));
 var DEFAULT_SETTINGS = {
   enableClaude: true,
   enableCursor: true,
@@ -129,15 +131,24 @@ var OpenClaudeTerminalPlugin = class extends import_obsidian.Plugin {
     const resolved = await this.resolvePlaceholders(prompt, file);
     const vaultPath = adapter.getBasePath();
     const dirPath = path.join(vaultPath, (_b = (_a = file.parent) == null ? void 0 : _a.path) != null ? _b : "");
-    const escaped = resolved.replace(/'/g, "'\\''");
-    (0, import_child_process.exec)(
-      `gnome-terminal -- bash -c 'cd "${dirPath}" && claude "${escaped}"; exec bash'`,
-      (err) => {
-        if (err) {
-          new import_obsidian.Notice(`Failed to open terminal: ${err.message}`);
-        }
+    const ts = Date.now();
+    const tmpPrompt = path.join(os.tmpdir(), `claude-prompt-${ts}.txt`);
+    const tmpScript = path.join(os.tmpdir(), `claude-launch-${ts}.sh`);
+    fs.writeFileSync(tmpPrompt, resolved, "utf-8");
+    fs.writeFileSync(tmpScript, [
+      "#!/bin/bash",
+      `cd "${dirPath.replace(/"/g, '\\"')}"`,
+      `prompt=$(cat "${tmpPrompt.replace(/"/g, '\\"')}")`,
+      `rm -f "${tmpPrompt.replace(/"/g, '\\"')}" "${tmpScript.replace(/"/g, '\\"')}"`,
+      `claude "$prompt"`,
+      `exec bash`
+    ].join("\n"), "utf-8");
+    fs.chmodSync(tmpScript, "755");
+    (0, import_child_process.exec)(`gnome-terminal -- bash "${tmpScript}"`, (err) => {
+      if (err) {
+        new import_obsidian.Notice(`Failed to open terminal: ${err.message}`);
       }
-    );
+    });
   }
   async resolvePlaceholders(prompt, file) {
     let result = prompt;
