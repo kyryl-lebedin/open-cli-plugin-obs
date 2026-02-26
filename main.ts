@@ -368,6 +368,7 @@ function attachMentionAutocomplete(app: App, wrapper: HTMLDivElement, el: HTMLTe
 function applyModalSize(modal: Modal) {
   modal.modalEl.style.width = "700px";
   modal.modalEl.style.maxWidth = "90vw";
+  modal.modalEl.style.minHeight = "70vh";
   modal.modalEl.style.maxHeight = "90vh";
   modal.contentEl.style.maxHeight = "85vh";
   modal.contentEl.style.overflowY = "auto";
