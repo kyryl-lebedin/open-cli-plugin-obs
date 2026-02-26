@@ -364,6 +364,14 @@ function attachMentionAutocomplete(app: App, wrapper: HTMLDivElement, el: HTMLTe
   return { hideDropdown };
 }
 
+// --- Helper to make modals big and scrollable ---
+function applyModalSize(modal: Modal) {
+  modal.modalEl.style.width = "700px";
+  modal.modalEl.style.maxWidth = "90vw";
+  modal.contentEl.style.maxHeight = "80vh";
+  modal.contentEl.style.overflowY = "auto";
+}
+
 // --- Helper to create header with back button ---
 function createHeaderWithBack(container: HTMLElement, title: string, onBack: () => void) {
   const header = container.createDiv();
@@ -379,7 +387,7 @@ function createPromptTextArea(app: App, container: HTMLElement, placeholder: str
   const wrapper = container.createDiv();
   wrapper.style.position = "relative";
   const textArea = new TextAreaComponent(wrapper);
-  textArea.inputEl.style.cssText = "width:100%;min-height:80px;font-size:14px;";
+  textArea.inputEl.style.cssText = "width:100%;min-height:200px;font-size:14px;";
   textArea.setPlaceholder(placeholder);
   if (initialValue) textArea.setValue(initialValue);
   const { hideDropdown } = attachMentionAutocomplete(app, wrapper, textArea.inputEl);
@@ -404,6 +412,7 @@ class LauncherModal extends Modal {
   render() {
     const { contentEl } = this;
     contentEl.empty();
+    applyModalSize(this);
 
     contentEl.createEl("h3", { text: "Claude Launcher" });
 
@@ -542,6 +551,8 @@ class AddTemplateOptionsModal extends Modal {
     const { contentEl } = this;
     contentEl.empty();
 
+    applyModalSize(this);
+
     createHeaderWithBack(contentEl, "Add new...", () => {
       this.close();
       if (this.onBackOverride) {
@@ -577,6 +588,7 @@ class AddTemplateModal extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
+    applyModalSize(this);
     createHeaderWithBack(contentEl, "New prompt template", () => {
       this.close();
       if (this.onBackOverride) {
@@ -657,6 +669,7 @@ class EditTemplateModal extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
+    applyModalSize(this);
     createHeaderWithBack(contentEl, "Edit template", () => {
       this.close();
       if (this.onBackOverride) {
@@ -734,13 +747,14 @@ class PromptInputModal extends Modal {
   onOpen() {
     const { contentEl } = this;
     contentEl.empty();
+    applyModalSize(this);
     createHeaderWithBack(contentEl, "Enter prompt", () => {
       this.close();
       new LauncherModal(this.app, this.plugin).open();
     });
 
     const { textArea, cleanup } = createPromptTextArea(this.app, contentEl, "Type your prompt... (@ for files, {{title}} / {{note}} for current note)");
-    textArea.inputEl.style.minHeight = "100px";
+    textArea.inputEl.style.minHeight = "200px";
     this.cleanupFn = cleanup;
 
     const bottomRow = contentEl.createDiv();
