@@ -494,12 +494,32 @@ class LauncherModal extends Modal {
 
   getAgentsFromFrontmatter(file: import("obsidian").TFile | null): string[] {
     if (!file) return [];
+    const result: string[] = [];
+
+    // Read agents from the current file
     const cache = this.app.metadataCache.getFileCache(file);
     const agents = cache?.frontmatter?.agents;
-    if (!agents) return [];
-    if (Array.isArray(agents)) return agents.map((a: any) => String(a).trim());
-    if (typeof agents === "string") return agents.split(",").map((a) => a.trim()).filter(Boolean);
-    return [];
+    if (agents) {
+      if (Array.isArray(agents)) result.push(...agents.map((a: any) => String(a).trim()));
+      else if (typeof agents === "string") result.push(...agents.split(",").map((a) => a.trim()).filter(Boolean));
+    }
+
+    // Inherit agents from parent folder note (FolderName/FolderName.md)
+    const parent = file.parent;
+    if (parent && parent.name) {
+      const folderNotePath = `${parent.path}/${parent.name}.md`;
+      const folderNote = this.app.vault.getAbstractFileByPath(folderNotePath);
+      if (folderNote && folderNote !== file && "extension" in folderNote) {
+        const folderCache = this.app.metadataCache.getFileCache(folderNote as import("obsidian").TFile);
+        const folderAgents = folderCache?.frontmatter?.agents;
+        if (folderAgents) {
+          if (Array.isArray(folderAgents)) result.push(...folderAgents.map((a: any) => String(a).trim()));
+          else if (typeof folderAgents === "string") result.push(...folderAgents.split(",").map((a) => a.trim()).filter(Boolean));
+        }
+      }
+    }
+
+    return [...new Set(result)];
   }
 
   onClose() {
@@ -574,11 +594,11 @@ class AddTemplateModal extends Modal {
     const { textArea: promptArea, cleanup } = createPromptTextArea(this.app, contentEl, "Enter the prompt... (@ to reference files)");
     this.cleanupFn = cleanup;
 
-    let isGlobal = true;
+    let isGlobal = false;
     const globalRow = contentEl.createDiv();
     globalRow.style.cssText = "display:flex;align-items:center;gap:8px;margin-top:10px;";
     const globalCheckbox = globalRow.createEl("input", { type: "checkbox" }) as HTMLInputElement;
-    globalCheckbox.checked = true;
+    globalCheckbox.checked = false;
     globalCheckbox.addEventListener("change", () => { isGlobal = globalCheckbox.checked; });
     globalRow.createEl("span", { text: "Show on all files" }).style.fontSize = "13px";
 
