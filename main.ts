@@ -604,8 +604,9 @@ class AddTemplateModal extends Modal {
     nameInput.placeholder = "Template name";
 
     contentEl.createEl("label", { text: "Description" }).style.cssText = "font-size:13px;font-weight:600;";
-    const descInput = contentEl.createEl("input", { type: "text" });
-    descInput.style.cssText = "width:100%;padding:8px;font-size:14px;margin-bottom:10px;";
+    const descInput = contentEl.createEl("textarea");
+    descInput.style.cssText = "width:100%;padding:8px;font-size:14px;margin-bottom:10px;resize:vertical;";
+    descInput.rows = 2;
     descInput.placeholder = "What does this agent do?";
 
     contentEl.createEl("label", { text: "Prompt" }).style.cssText = "font-size:13px;font-weight:600;";
@@ -685,8 +686,9 @@ class EditTemplateModal extends Modal {
     nameInput.value = this.template.name;
 
     contentEl.createEl("label", { text: "Description" }).style.cssText = "font-size:13px;font-weight:600;";
-    const descInput = contentEl.createEl("input", { type: "text" });
-    descInput.style.cssText = "width:100%;padding:8px;font-size:14px;margin-bottom:10px;";
+    const descInput = contentEl.createEl("textarea");
+    descInput.style.cssText = "width:100%;padding:8px;font-size:14px;margin-bottom:10px;resize:vertical;";
+    descInput.rows = 2;
     descInput.placeholder = "What does this agent do?";
     descInput.value = this.template.description ?? "";
 
