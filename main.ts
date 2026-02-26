@@ -10,6 +10,7 @@ type PermissionMode = typeof PERMISSION_MODES[number];
 interface PromptTemplate {
   id: string;
   name: string;
+  description: string;
   prompt: string;
   global: boolean;
 }
@@ -427,8 +428,13 @@ class LauncherModal extends Modal {
       const row = list.createDiv();
       row.style.cssText = "display:flex;align-items:center;gap:4px;margin-bottom:6px;";
 
-      const tplBtn = row.createEl("button", { text: tpl.name });
+      const tplBtn = row.createEl("button");
       tplBtn.style.cssText = "flex:1;padding:10px;cursor:pointer;font-size:14px;text-align:left;";
+      tplBtn.createEl("div", { text: tpl.name });
+      if (tpl.description) {
+        const descEl = tplBtn.createEl("div", { text: tpl.description });
+        descEl.style.cssText = "font-size:11px;opacity:0.6;margin-top:2px;";
+      }
       tplBtn.addEventListener("click", () => {
         this.close();
         if (this.headless) {
@@ -590,6 +596,11 @@ class AddTemplateModal extends Modal {
     nameInput.style.cssText = "width:100%;padding:8px;font-size:14px;margin-bottom:10px;";
     nameInput.placeholder = "Template name";
 
+    contentEl.createEl("label", { text: "Description" }).style.cssText = "font-size:13px;font-weight:600;";
+    const descInput = contentEl.createEl("input", { type: "text" });
+    descInput.style.cssText = "width:100%;padding:8px;font-size:14px;margin-bottom:10px;";
+    descInput.placeholder = "What does this agent do?";
+
     contentEl.createEl("label", { text: "Prompt" }).style.cssText = "font-size:13px;font-weight:600;";
     const { textArea: promptArea, cleanup } = createPromptTextArea(this.app, contentEl, "Enter the prompt... (@ to reference files)");
     this.cleanupFn = cleanup;
@@ -614,6 +625,7 @@ class AddTemplateModal extends Modal {
       this.plugin.settings.templates.push({
         id: Date.now().toString(),
         name,
+        description: descInput.value.trim(),
         prompt,
         global: isGlobal,
       });
@@ -664,6 +676,12 @@ class EditTemplateModal extends Modal {
     nameInput.style.cssText = "width:100%;padding:8px;font-size:14px;margin-bottom:10px;";
     nameInput.value = this.template.name;
 
+    contentEl.createEl("label", { text: "Description" }).style.cssText = "font-size:13px;font-weight:600;";
+    const descInput = contentEl.createEl("input", { type: "text" });
+    descInput.style.cssText = "width:100%;padding:8px;font-size:14px;margin-bottom:10px;";
+    descInput.placeholder = "What does this agent do?";
+    descInput.value = this.template.description ?? "";
+
     contentEl.createEl("label", { text: "Prompt" }).style.cssText = "font-size:13px;font-weight:600;";
     const { textArea: promptArea, cleanup } = createPromptTextArea(this.app, contentEl, "Enter the prompt... (@ to reference files)", this.template.prompt);
     this.cleanupFn = cleanup;
@@ -686,6 +704,7 @@ class EditTemplateModal extends Modal {
         return;
       }
       this.template.name = name;
+      this.template.description = descInput.value.trim();
       this.template.prompt = prompt;
       this.template.global = isGlobal;
       await this.plugin.saveSettings();
@@ -848,9 +867,10 @@ class PluginSettingsTab extends PluginSettingTab {
     const listEl = containerEl.createDiv({ cls: "agent-list" });
 
     for (const tpl of this.plugin.settings.templates) {
+      const descText = tpl.description || (tpl.prompt.length > 60 ? tpl.prompt.slice(0, 60) + "..." : tpl.prompt);
       const setting = new Setting(listEl)
         .setName(tpl.name)
-        .setDesc(tpl.prompt.length > 60 ? tpl.prompt.slice(0, 60) + "..." : tpl.prompt);
+        .setDesc(descText);
 
       // "Global" button instead of toggle
       setting.addButton((btn) => {
