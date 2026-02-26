@@ -428,13 +428,8 @@ class LauncherModal extends Modal {
       const row = list.createDiv();
       row.style.cssText = "display:flex;align-items:center;gap:4px;margin-bottom:6px;";
 
-      const tplBtn = row.createEl("button");
+      const tplBtn = row.createEl("button", { text: tpl.name });
       tplBtn.style.cssText = "flex:1;padding:10px;cursor:pointer;font-size:14px;text-align:left;";
-      tplBtn.createEl("div", { text: tpl.name });
-      if (tpl.description) {
-        const descEl = tplBtn.createEl("div", { text: tpl.description });
-        descEl.style.cssText = "font-size:11px;opacity:0.6;margin-top:2px;";
-      }
       tplBtn.addEventListener("click", () => {
         this.close();
         if (this.headless) {
@@ -867,10 +862,9 @@ class PluginSettingsTab extends PluginSettingTab {
     const listEl = containerEl.createDiv({ cls: "agent-list" });
 
     for (const tpl of this.plugin.settings.templates) {
-      const descText = tpl.description || (tpl.prompt.length > 60 ? tpl.prompt.slice(0, 60) + "..." : tpl.prompt);
       const setting = new Setting(listEl)
         .setName(tpl.name)
-        .setDesc(descText);
+        .setDesc(tpl.prompt.length > 60 ? tpl.prompt.slice(0, 60) + "..." : tpl.prompt);
 
       // "Global" button instead of toggle
       setting.addButton((btn) => {
