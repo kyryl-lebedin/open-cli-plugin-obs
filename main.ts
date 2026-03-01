@@ -4,8 +4,49 @@ import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
 
-const PERMISSION_MODES = ["default", "plan", "acceptEdits", "bypassPermissions"] as const;
-type PermissionMode = typeof PERMISSION_MODES[number];
+interface BackendConfig {
+  id: string;
+  name: string;
+  command: string;
+  permissionFlag: string;
+  permissionModes: string[];
+  defaultPermission: string;
+  interactiveTemplate: string;
+  headlessTemplate: string;
+}
+
+const DEFAULT_BACKENDS: BackendConfig[] = [
+  {
+    id: "claude-code",
+    name: "Claude Code",
+    command: "claude",
+    permissionFlag: "--permission-mode",
+    permissionModes: ["default", "plan", "acceptEdits", "bypassPermissions"],
+    defaultPermission: "default",
+    interactiveTemplate: '{command} {permission} "$prompt"',
+    headlessTemplate: 'cat "{prompt_file}" | {command} -p {permission} > "{output_file}" 2>&1',
+  },
+  {
+    id: "codex",
+    name: "Codex",
+    command: "codex",
+    permissionFlag: "-a",
+    permissionModes: ["on-request", "untrusted", "never"],
+    defaultPermission: "on-request",
+    interactiveTemplate: '{command} {permission} "$prompt"',
+    headlessTemplate: '{command} {permission} exec "$(cat "{prompt_file}")" > "{output_file}" 2>&1',
+  },
+  {
+    id: "gemini-cli",
+    name: "Gemini CLI",
+    command: "gemini",
+    permissionFlag: "--approval-mode",
+    permissionModes: ["default", "auto_edit", "yolo", "plan"],
+    defaultPermission: "default",
+    interactiveTemplate: '{command} {permission} "$prompt"',
+    headlessTemplate: '{command} {permission} -p "$(cat "{prompt_file}")" > "{output_file}" 2>&1',
+  },
+];
 
 interface PromptTemplate {
   id: string;
@@ -16,22 +57,28 @@ interface PromptTemplate {
 }
 
 interface PluginSettings {
-  enableClaude: boolean;
+  activeBackend: string;
+  backends: BackendConfig[];
+  terminalCommand: string;
+  enableTerminal: boolean;
   enableCursor: boolean;
   enableLauncher: boolean;
   templates: PromptTemplate[];
 }
 
 const DEFAULT_SETTINGS: PluginSettings = {
-  enableClaude: true,
+  activeBackend: "claude-code",
+  backends: DEFAULT_BACKENDS,
+  terminalCommand: "gnome-terminal --",
+  enableTerminal: true,
   enableCursor: true,
   enableLauncher: true,
   templates: [],
 };
 
-export default class OpenClaudeTerminalPlugin extends Plugin {
+export default class CliAgentPlugin extends Plugin {
   settings: PluginSettings;
-  claudeCommandId = "open-claude-terminal";
+  terminalCommandId = "open-claude-terminal";
   cursorCommandId = "open-cursor-codebase";
 
   async onload() {
@@ -41,11 +88,11 @@ export default class OpenClaudeTerminalPlugin extends Plugin {
   }
 
   registerCommands() {
-    if (this.settings.enableClaude) {
+    if (this.settings.enableTerminal) {
       this.addCommand({
-        id: this.claudeCommandId,
-        name: "Open Claude in terminal",
-        callback: () => this.openClaude(),
+        id: this.terminalCommandId,
+        name: "Open agent in terminal",
+        callback: () => this.openTerminal(),
       });
     }
 
@@ -60,13 +107,33 @@ export default class OpenClaudeTerminalPlugin extends Plugin {
     if (this.settings.enableLauncher) {
       this.addCommand({
         id: "claude-launcher",
-        name: "Claude launcher",
+        name: "Agent launcher",
         callback: () => new LauncherModal(this.app, this).open(),
       });
     }
   }
 
-  openClaude() {
+  getActiveBackend(): BackendConfig {
+    const found = this.settings.backends.find(b => b.id === this.settings.activeBackend);
+    if (found) return found;
+    if (this.settings.backends.length > 0) return this.settings.backends[0];
+    return DEFAULT_BACKENDS[0];
+  }
+
+  buildPermissionArg(backend: BackendConfig, mode: string): string {
+    if (mode === backend.defaultPermission) return "";
+    return `${backend.permissionFlag} ${mode}`;
+  }
+
+  resolveTemplate(template: string, vars: Record<string, string>): string {
+    let result = template;
+    for (const [key, value] of Object.entries(vars)) {
+      result = result.replace(new RegExp(`\\{${key}\\}`, 'g'), value);
+    }
+    return result.replace(/  +/g, ' ').trim();
+  }
+
+  openTerminal() {
     const file = this.app.workspace.getActiveFile();
     if (!file) {
       new Notice("No active file");
@@ -81,9 +148,10 @@ export default class OpenClaudeTerminalPlugin extends Plugin {
 
     const vaultPath = adapter.getBasePath();
     const dirPath = path.join(vaultPath, file.parent?.path ?? "");
+    const backend = this.getActiveBackend();
 
     exec(
-      `gnome-terminal -- bash -c "cd '${dirPath}' && claude; exec bash"`,
+      `${this.settings.terminalCommand} bash -ic "cd '${dirPath}' && ${backend.command}; exec bash"`,
       (err) => {
         if (err) {
           new Notice(`Failed to open terminal: ${err.message}`);
@@ -114,7 +182,7 @@ export default class OpenClaudeTerminalPlugin extends Plugin {
     });
   }
 
-  async spawnClaudeWithPrompt(prompt: string, permissionMode: PermissionMode = "default") {
+  async spawnWithPrompt(prompt: string, permissionMode: string = "") {
     const file = this.app.workspace.getActiveFile();
     if (!file) {
       new Notice("No active file");
@@ -127,37 +195,41 @@ export default class OpenClaudeTerminalPlugin extends Plugin {
       return;
     }
 
-    // Resolve placeholders
     const resolved = await this.resolvePlaceholders(prompt, file);
-
     const vaultPath = adapter.getBasePath();
     const dirPath = path.join(vaultPath, file.parent?.path ?? "");
+    const backend = this.getActiveBackend();
+    const permArg = this.buildPermissionArg(backend, permissionMode || backend.defaultPermission);
 
-    // Write prompt to temp file, then write a launcher script
-    // that reads it safely via variable assignment (no shell reinterpretation)
+    const interactiveCmd = this.resolveTemplate(backend.interactiveTemplate, {
+      command: backend.command,
+      permission: permArg,
+    });
+
     const ts = Date.now();
-    const tmpPrompt = path.join(os.tmpdir(), `claude-prompt-${ts}.txt`);
-    const tmpScript = path.join(os.tmpdir(), `claude-launch-${ts}.sh`);
+    const tmpPrompt = path.join(os.tmpdir(), `agent-prompt-${ts}.txt`);
+    const tmpScript = path.join(os.tmpdir(), `agent-launch-${ts}.sh`);
 
     fs.writeFileSync(tmpPrompt, resolved, "utf-8");
     fs.writeFileSync(tmpScript, [
-      "#!/bin/bash",
+      "#!/bin/bash -i",
+      `source ~/.profile 2>/dev/null || true`,
       `cd "${dirPath.replace(/"/g, '\\"')}"`,
       `prompt=$(cat "${tmpPrompt.replace(/"/g, '\\"')}")`,
       `rm -f "${tmpPrompt.replace(/"/g, '\\"')}" "${tmpScript.replace(/"/g, '\\"')}"`,
-      `claude${permissionMode !== "default" ? ` --permission-mode ${permissionMode}` : ""} "$prompt"`,
+      interactiveCmd,
       `exec bash`,
     ].join("\n"), "utf-8");
     fs.chmodSync(tmpScript, "755");
 
-    exec(`gnome-terminal -- bash "${tmpScript}"`, (err) => {
+    exec(`${this.settings.terminalCommand} bash "${tmpScript}"`, (err) => {
       if (err) {
         new Notice(`Failed to open terminal: ${err.message}`);
       }
     });
   }
 
-  async runClaudeHeadless(prompt: string, permissionMode: PermissionMode = "default") {
+  async runHeadless(prompt: string, permissionMode: string = "") {
     const file = this.app.workspace.getActiveFile();
     if (!file) {
       new Notice("No active file");
@@ -173,21 +245,29 @@ export default class OpenClaudeTerminalPlugin extends Plugin {
     const resolved = await this.resolvePlaceholders(prompt, file);
     const vaultPath = adapter.getBasePath();
     const dirPath = path.join(vaultPath, file.parent?.path ?? "");
+    const backend = this.getActiveBackend();
+    const permArg = this.buildPermissionArg(backend, permissionMode || backend.defaultPermission);
 
-    new Notice("Running Claude headless...");
+    new Notice(`Running ${backend.name} headless...`);
 
     const ts = Date.now();
-    const tmpPrompt = path.join(os.tmpdir(), `claude-prompt-${ts}.txt`);
-    const tmpOutput = path.join(os.tmpdir(), `claude-output-${ts}.txt`);
-    const tmpScript = path.join(os.tmpdir(), `claude-headless-${ts}.sh`);
+    const tmpPrompt = path.join(os.tmpdir(), `agent-prompt-${ts}.txt`);
+    const tmpOutput = path.join(os.tmpdir(), `agent-output-${ts}.txt`);
+    const tmpScript = path.join(os.tmpdir(), `agent-headless-${ts}.sh`);
+
+    const headlessCmd = this.resolveTemplate(backend.headlessTemplate, {
+      command: backend.command,
+      permission: permArg,
+      prompt_file: tmpPrompt.replace(/"/g, '\\"'),
+      output_file: tmpOutput.replace(/"/g, '\\"'),
+    });
 
     fs.writeFileSync(tmpPrompt, resolved, "utf-8");
     fs.writeFileSync(tmpScript, [
-      "#!/bin/bash",
-      `source ~/.bashrc 2>/dev/null || source ~/.profile 2>/dev/null || true`,
-      `export PATH="$HOME/.local/bin:$HOME/.nvm/versions/node/$(ls $HOME/.nvm/versions/node/ 2>/dev/null | tail -1)/bin:$PATH"`,
+      "#!/bin/bash -i",
+      `source ~/.profile 2>/dev/null || true`,
       `cd "${dirPath.replace(/"/g, '\\"')}"`,
-      `cat "${tmpPrompt.replace(/"/g, '\\"')}" | claude -p${permissionMode !== "default" ? ` --permission-mode ${permissionMode}` : ""} > "${tmpOutput.replace(/"/g, '\\"')}" 2>&1`,
+      headlessCmd,
       `rm -f "${tmpPrompt.replace(/"/g, '\\"')}" "${tmpScript.replace(/"/g, '\\"')}"`,
     ].join("\n"), "utf-8");
     fs.chmodSync(tmpScript, "755");
@@ -195,9 +275,9 @@ export default class OpenClaudeTerminalPlugin extends Plugin {
     const self = this;
     const sourceFile = file;
     const resolvedPrompt = resolved;
+    const backendName = backend.name;
 
     exec(`bash "${tmpScript}"`, { maxBuffer: 10 * 1024 * 1024, timeout: 300000 }, (err) => {
-      // Wrap async work to avoid swallowed promise rejections
       (async () => {
         try {
           let response = "";
@@ -211,26 +291,25 @@ export default class OpenClaudeTerminalPlugin extends Plugin {
           if (!response && err) {
             response = `Error: ${err.message}`;
           } else if (!response) {
-            response = "No output from Claude";
+            response = `No output from ${backendName}`;
           }
 
-          // Create response note with unique name
           const words = prompt.split(/\s+/).filter(Boolean);
           const slug = words.slice(0, 5).join(" ") + (words.length > 5 ? "..." : "");
           const safeSlug = slug.replace(/[\\/:*?"<>|#^[\]]/g, "").trim();
           const ts = Date.now();
-          const noteName = `claude - ${safeSlug} ${ts}`;
+          const backendSlug = backendName.toLowerCase().replace(/\s+/g, "-");
+          const noteName = `${backendSlug} - ${safeSlug} ${ts}`;
           const noteContent = `**User:** ${resolvedPrompt}\n\n**Response:** ${response}`;
           const folderPath = sourceFile.parent?.path ?? "";
           const notePath = folderPath ? `${folderPath}/${noteName}.md` : `${noteName}.md`;
 
           await self.app.vault.create(notePath, noteContent);
 
-          // Append wiki link to source note
           const currentContent = await self.app.vault.read(sourceFile);
           await self.app.vault.modify(sourceFile, currentContent + `\n[[${noteName}]]`);
 
-          new Notice("Claude response saved");
+          new Notice(`${backendName} response saved`);
         } catch (e: any) {
           new Notice(`Headless error: ${e.message}`);
         }
@@ -254,7 +333,22 @@ export default class OpenClaudeTerminalPlugin extends Plugin {
   }
 
   async loadSettings() {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    const loaded = await this.loadData();
+    this.settings = Object.assign({}, DEFAULT_SETTINGS, loaded);
+
+    // Migrate from old settings format
+    if (loaded && 'enableClaude' in loaded && !('enableTerminal' in loaded)) {
+      this.settings.enableTerminal = (loaded as any).enableClaude;
+    }
+    if (loaded && !('backends' in loaded)) {
+      this.settings.backends = DEFAULT_BACKENDS.map(b => ({ ...b }));
+    }
+    if (loaded && !('activeBackend' in loaded)) {
+      this.settings.activeBackend = "claude-code";
+    }
+    if (loaded && !('terminalCommand' in loaded)) {
+      this.settings.terminalCommand = "gnome-terminal --";
+    }
   }
 
   async saveSettings() {
@@ -395,27 +489,53 @@ function createPromptTextArea(app: App, container: HTMLElement, placeholder: str
   return { textArea, cleanup: hideDropdown };
 }
 
-class LauncherModal extends Modal {
-  plugin: OpenClaudeTerminalPlugin;
+// --- Shared select style for permission mode dropdowns ---
+const MODE_SELECT_STYLE = "padding:6px 28px 6px 10px;font-size:13px;border-radius:4px;cursor:pointer;" +
+  "appearance:none;-webkit-appearance:none;background-color:var(--background-primary);" +
+  "border:1px solid var(--background-modifier-border);" +
+  "background-image:url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E\");" +
+  "background-repeat:no-repeat;background-position:right 8px center;";
 
-  constructor(app: App, plugin: OpenClaudeTerminalPlugin) {
+function createPermissionModeSelect(container: HTMLElement, backend: BackendConfig, currentMode: string, onChange: (mode: string) => void): void {
+  if (backend.permissionModes.length <= 1) return;
+  const modeSelect = container.createEl("select");
+  modeSelect.style.cssText = MODE_SELECT_STYLE;
+  for (const mode of backend.permissionModes) {
+    const opt = modeSelect.createEl("option", { text: mode, value: mode });
+    if (mode === currentMode) opt.selected = true;
+  }
+  modeSelect.addEventListener("change", () => onChange(modeSelect.value));
+}
+
+class LauncherModal extends Modal {
+  plugin: CliAgentPlugin;
+
+  constructor(app: App, plugin: CliAgentPlugin) {
     super(app);
     this.plugin = plugin;
   }
 
   onOpen() {
+    const backend = this.plugin.getActiveBackend();
+    this.permissionMode = backend.defaultPermission;
     this.render();
   }
 
   headless = false;
-  permissionMode: PermissionMode = "default";
+  permissionMode = "";
 
   render() {
     const { contentEl } = this;
     contentEl.empty();
     applyModalSize(this);
 
-    contentEl.createEl("h3", { text: "Claude Launcher" });
+    const backend = this.plugin.getActiveBackend();
+
+    contentEl.createEl("h3", { text: "Agent Launcher" });
+
+    const indicator = contentEl.createDiv();
+    indicator.style.cssText = "font-size:12px;opacity:0.6;margin-top:-8px;margin-bottom:10px;";
+    indicator.textContent = `Backend: ${backend.name}`;
 
     // Custom prompt button
     const list = contentEl.createDiv();
@@ -443,9 +563,9 @@ class LauncherModal extends Modal {
       tplBtn.addEventListener("click", () => {
         this.close();
         if (this.headless) {
-          this.plugin.runClaudeHeadless(tpl.prompt, this.permissionMode);
+          this.plugin.runHeadless(tpl.prompt, this.permissionMode);
         } else {
-          this.plugin.spawnClaudeWithPrompt(tpl.prompt, this.permissionMode);
+          this.plugin.spawnWithPrompt(tpl.prompt, this.permissionMode);
         }
       });
 
@@ -467,7 +587,7 @@ class LauncherModal extends Modal {
       });
     }
 
-    // Bottom row: add template + headless toggle
+    // Bottom row: add template + headless toggle + permission mode
     const bottomRow = contentEl.createDiv();
     bottomRow.style.cssText = "display:flex;align-items:center;gap:8px;margin-top:10px;";
 
@@ -488,18 +608,8 @@ class LauncherModal extends Modal {
       headlessBtn.style.color = this.headless ? "var(--text-on-accent)" : "";
     });
 
-    const modeSelect = bottomRow.createEl("select");
-    modeSelect.style.cssText = "padding:6px 28px 6px 10px;font-size:13px;border-radius:4px;cursor:pointer;" +
-      "appearance:none;-webkit-appearance:none;background-color:var(--background-primary);" +
-      "border:1px solid var(--background-modifier-border);" +
-      "background-image:url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E\");" +
-      "background-repeat:no-repeat;background-position:right 8px center;";
-    for (const mode of PERMISSION_MODES) {
-      const opt = modeSelect.createEl("option", { text: mode, value: mode });
-      if (mode === this.permissionMode) opt.selected = true;
-    }
-    modeSelect.addEventListener("change", () => {
-      this.permissionMode = modeSelect.value as PermissionMode;
+    createPermissionModeSelect(bottomRow, backend, this.permissionMode, (mode) => {
+      this.permissionMode = mode;
     });
   }
 
@@ -507,7 +617,6 @@ class LauncherModal extends Modal {
     if (!file) return [];
     const result: string[] = [];
 
-    // Read agents from the current file
     const cache = this.app.metadataCache.getFileCache(file);
     const agents = cache?.frontmatter?.agents;
     if (agents) {
@@ -515,7 +624,6 @@ class LauncherModal extends Modal {
       else if (typeof agents === "string") result.push(...agents.split(",").map((a) => a.trim()).filter(Boolean));
     }
 
-    // Inherit agents from parent folder note (FolderName/FolderName.md)
     const parent = file.parent;
     if (parent && parent.name) {
       const folderNotePath = `${parent.path}/${parent.name}.md`;
@@ -539,10 +647,10 @@ class LauncherModal extends Modal {
 }
 
 class AddTemplateOptionsModal extends Modal {
-  plugin: OpenClaudeTerminalPlugin;
+  plugin: CliAgentPlugin;
   onBackOverride: (() => void) | null;
 
-  constructor(app: App, plugin: OpenClaudeTerminalPlugin, onBack?: () => void) {
+  constructor(app: App, plugin: CliAgentPlugin, onBack?: () => void) {
     super(app);
     this.plugin = plugin;
     this.onBackOverride = onBack ?? null;
@@ -577,10 +685,10 @@ class AddTemplateOptionsModal extends Modal {
 }
 
 class AddTemplateModal extends Modal {
-  plugin: OpenClaudeTerminalPlugin;
+  plugin: CliAgentPlugin;
   onBackOverride: (() => void) | null;
 
-  constructor(app: App, plugin: OpenClaudeTerminalPlugin, onBack?: () => void) {
+  constructor(app: App, plugin: CliAgentPlugin, onBack?: () => void) {
     super(app);
     this.plugin = plugin;
     this.onBackOverride = onBack ?? null;
@@ -657,11 +765,11 @@ class AddTemplateModal extends Modal {
 }
 
 class EditTemplateModal extends Modal {
-  plugin: OpenClaudeTerminalPlugin;
+  plugin: CliAgentPlugin;
   template: PromptTemplate;
   onBackOverride: (() => void) | null;
 
-  constructor(app: App, plugin: OpenClaudeTerminalPlugin, template: PromptTemplate, onBack?: () => void) {
+  constructor(app: App, plugin: CliAgentPlugin, template: PromptTemplate, onBack?: () => void) {
     super(app);
     this.plugin = plugin;
     this.template = template;
@@ -737,12 +845,12 @@ class EditTemplateModal extends Modal {
 }
 
 class PromptInputModal extends Modal {
-  plugin: OpenClaudeTerminalPlugin;
+  plugin: CliAgentPlugin;
   cleanupFn: (() => void) | null = null;
   headless = false;
-  permissionMode: PermissionMode = "default";
+  permissionMode = "";
 
-  constructor(app: App, plugin: OpenClaudeTerminalPlugin) {
+  constructor(app: App, plugin: CliAgentPlugin) {
     super(app);
     this.plugin = plugin;
   }
@@ -751,6 +859,10 @@ class PromptInputModal extends Modal {
     const { contentEl } = this;
     contentEl.empty();
     applyModalSize(this);
+
+    const backend = this.plugin.getActiveBackend();
+    this.permissionMode = backend.defaultPermission;
+
     createHeaderWithBack(contentEl, "Enter prompt", () => {
       this.close();
       new LauncherModal(this.app, this.plugin).open();
@@ -775,18 +887,8 @@ class PromptInputModal extends Modal {
       headlessBtn.style.color = this.headless ? "var(--text-on-accent)" : "";
     });
 
-    const modeSelect = bottomRow.createEl("select");
-    modeSelect.style.cssText = "padding:6px 28px 6px 10px;font-size:13px;border-radius:4px;cursor:pointer;" +
-      "appearance:none;-webkit-appearance:none;background-color:var(--background-primary);" +
-      "border:1px solid var(--background-modifier-border);" +
-      "background-image:url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E\");" +
-      "background-repeat:no-repeat;background-position:right 8px center;";
-    for (const mode of PERMISSION_MODES) {
-      const opt = modeSelect.createEl("option", { text: mode, value: mode });
-      if (mode === this.permissionMode) opt.selected = true;
-    }
-    modeSelect.addEventListener("change", () => {
-      this.permissionMode = modeSelect.value as PermissionMode;
+    createPermissionModeSelect(bottomRow, backend, this.permissionMode, (mode) => {
+      this.permissionMode = mode;
     });
 
     submitBtn.addEventListener("click", () => {
@@ -797,9 +899,9 @@ class PromptInputModal extends Modal {
       }
       this.close();
       if (this.headless) {
-        this.plugin.runClaudeHeadless(prompt, this.permissionMode);
+        this.plugin.runHeadless(prompt, this.permissionMode);
       } else {
-        this.plugin.spawnClaudeWithPrompt(prompt, this.permissionMode);
+        this.plugin.spawnWithPrompt(prompt, this.permissionMode);
       }
     });
   }
@@ -811,9 +913,9 @@ class PromptInputModal extends Modal {
 }
 
 class PluginSettingsTab extends PluginSettingTab {
-  plugin: OpenClaudeTerminalPlugin;
+  plugin: CliAgentPlugin;
 
-  constructor(app: App, plugin: OpenClaudeTerminalPlugin) {
+  constructor(app: App, plugin: CliAgentPlugin) {
     super(app, plugin);
     this.plugin = plugin;
   }
@@ -823,19 +925,46 @@ class PluginSettingsTab extends PluginSettingTab {
     containerEl.empty();
 
     new Setting(containerEl)
-      .setName("Enable Open Claude")
-      .setDesc("Show 'Open Claude in terminal' command")
+      .setName("Active backend")
+      .setDesc("Select which CLI agent to use")
+      .addDropdown((dropdown) => {
+        for (const b of this.plugin.settings.backends) {
+          dropdown.addOption(b.id, b.name);
+        }
+        dropdown.setValue(this.plugin.settings.activeBackend);
+        dropdown.onChange(async (value) => {
+          this.plugin.settings.activeBackend = value;
+          await this.plugin.saveSettings();
+        });
+      });
+
+    new Setting(containerEl)
+      .setName("Terminal command")
+      .setDesc("Command prefix to launch terminal (e.g., 'gnome-terminal --', 'kitty', 'alacritty -e')")
+      .addText((text) => {
+        text.setValue(this.plugin.settings.terminalCommand);
+        text.setPlaceholder("gnome-terminal --");
+        text.inputEl.style.width = "300px";
+        text.onChange(async (value) => {
+          this.plugin.settings.terminalCommand = value;
+          await this.plugin.saveSettings();
+        });
+      });
+
+    new Setting(containerEl)
+      .setName("Enable Open Terminal")
+      .setDesc("Show 'Open agent in terminal' command")
       .addToggle((toggle) =>
-        toggle.setValue(this.plugin.settings.enableClaude).onChange(async (value) => {
-          this.plugin.settings.enableClaude = value;
+        toggle.setValue(this.plugin.settings.enableTerminal).onChange(async (value) => {
+          this.plugin.settings.enableTerminal = value;
           await this.plugin.saveSettings();
           new Notice("Reload Obsidian to apply command changes");
         })
       );
 
     new Setting(containerEl)
-      .setName("Enable Claude Launcher")
-      .setDesc("Show 'Claude launcher' command")
+      .setName("Enable Agent Launcher")
+      .setDesc("Show 'Agent launcher' command")
       .addToggle((toggle) =>
         toggle.setValue(this.plugin.settings.enableLauncher).onChange(async (value) => {
           this.plugin.settings.enableLauncher = value;
@@ -883,7 +1012,6 @@ class PluginSettingsTab extends PluginSettingTab {
         .setName(tpl.name)
         .setDesc(tpl.prompt.length > 60 ? tpl.prompt.slice(0, 60) + "..." : tpl.prompt);
 
-      // "Global" button instead of toggle
       setting.addButton((btn) => {
         const isGlobal = tpl.global ?? false;
         btn.setButtonText("Global");
@@ -905,7 +1033,6 @@ class PluginSettingsTab extends PluginSettingTab {
           .setTooltip("Edit prompt")
           .onClick(() => {
             new EditTemplateModal(this.app, this.plugin, tpl, () => {
-              // Return to settings tab instead of launcher
               this.display();
             }).open();
           })

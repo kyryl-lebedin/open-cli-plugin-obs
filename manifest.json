@@ -1,9 +1,9 @@
 {
   "id": "open-claude-terminal",
-  "name": "Open Claude Terminal",
-  "version": "1.0.0",
+  "name": "CLI Agent Launcher",
+  "version": "2.0.0",
   "minAppVersion": "0.15.0",
-  "description": "Opens a terminal in the current note's directory and runs claude",
+  "description": "Launch CLI agents (Claude Code, Codex, Gemini CLI) from Obsidian notes",
   "author": "kyryl",
   "isDesktopOnly": true
 }
