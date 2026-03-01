@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "build": "node esbuild.config.mjs production"
+    "build": "node esbuild.config.mjs production",
+    "test": "vitest run"
   },
   "keywords": [],
   "author": "",
@@ -13,6 +14,7 @@
     "@types/node": "^25.3.0",
     "esbuild": "^0.27.3",
     "obsidian": "^1.12.2",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
   }
 }

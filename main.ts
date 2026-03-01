@@ -4,77 +4,20 @@ import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
 
-interface BackendConfig {
-  id: string;
-  name: string;
-  command: string;
-  permissionFlag: string;
-  permissionModes: string[];
-  defaultPermission: string;
-  interactiveTemplate: string;
-  headlessTemplate: string;
-}
-
-const DEFAULT_BACKENDS: BackendConfig[] = [
-  {
-    id: "claude-code",
-    name: "Claude Code",
-    command: "claude",
-    permissionFlag: "--permission-mode",
-    permissionModes: ["default", "plan", "acceptEdits", "bypassPermissions"],
-    defaultPermission: "default",
-    interactiveTemplate: '{command} {permission} "$prompt"',
-    headlessTemplate: 'cat "{prompt_file}" | {command} -p {permission} > "{output_file}" 2>&1',
-  },
-  {
-    id: "codex",
-    name: "Codex",
-    command: "codex",
-    permissionFlag: "-a",
-    permissionModes: ["on-request", "untrusted", "never"],
-    defaultPermission: "on-request",
-    interactiveTemplate: '{command} {permission} "$prompt"',
-    headlessTemplate: '{command} {permission} exec "$(cat "{prompt_file}")" > "{output_file}" 2>&1',
-  },
-  {
-    id: "gemini-cli",
-    name: "Gemini CLI",
-    command: "gemini",
-    permissionFlag: "--approval-mode",
-    permissionModes: ["default", "auto_edit", "yolo", "plan"],
-    defaultPermission: "default",
-    interactiveTemplate: '{command} {permission} "$prompt"',
-    headlessTemplate: '{command} {permission} -p "$(cat "{prompt_file}")" > "{output_file}" 2>&1',
-  },
-];
-
-interface PromptTemplate {
-  id: string;
-  name: string;
-  description: string;
-  prompt: string;
-  global: boolean;
-}
-
-interface PluginSettings {
-  activeBackend: string;
-  backends: BackendConfig[];
-  terminalCommand: string;
-  enableTerminal: boolean;
-  enableCursor: boolean;
-  enableLauncher: boolean;
-  templates: PromptTemplate[];
-}
-
-const DEFAULT_SETTINGS: PluginSettings = {
-  activeBackend: "claude-code",
-  backends: DEFAULT_BACKENDS,
-  terminalCommand: "gnome-terminal --",
-  enableTerminal: true,
-  enableCursor: true,
-  enableLauncher: true,
-  templates: [],
-};
+import {
+  BackendConfig,
+  PromptTemplate,
+  PluginSettings,
+  DEFAULT_BACKENDS,
+  DEFAULT_SETTINGS,
+  resolveTemplate,
+  buildPermissionArg,
+  getActiveBackend,
+  buildInteractiveScript,
+  buildHeadlessScript,
+  buildResponseNoteName,
+  migrateSettings,
+} from "./backend";
 
 export default class CliAgentPlugin extends Plugin {
   settings: PluginSettings;
@@ -114,23 +57,7 @@ export default class CliAgentPlugin extends Plugin {
   }
 
   getActiveBackend(): BackendConfig {
-    const found = this.settings.backends.find(b => b.id === this.settings.activeBackend);
-    if (found) return found;
-    if (this.settings.backends.length > 0) return this.settings.backends[0];
-    return DEFAULT_BACKENDS[0];
-  }
-
-  buildPermissionArg(backend: BackendConfig, mode: string): string {
-    if (mode === backend.defaultPermission) return "";
-    return `${backend.permissionFlag} ${mode}`;
-  }
-
-  resolveTemplate(template: string, vars: Record<string, string>): string {
-    let result = template;
-    for (const [key, value] of Object.entries(vars)) {
-      result = result.replace(new RegExp(`\\{${key}\\}`, 'g'), value);
-    }
-    return result.replace(/  +/g, ' ').trim();
+    return getActiveBackend(this.settings);
   }
 
   openTerminal() {
@@ -199,27 +126,15 @@ export default class CliAgentPlugin extends Plugin {
     const vaultPath = adapter.getBasePath();
     const dirPath = path.join(vaultPath, file.parent?.path ?? "");
     const backend = this.getActiveBackend();
-    const permArg = this.buildPermissionArg(backend, permissionMode || backend.defaultPermission);
-
-    const interactiveCmd = this.resolveTemplate(backend.interactiveTemplate, {
-      command: backend.command,
-      permission: permArg,
-    });
 
     const ts = Date.now();
     const tmpPrompt = path.join(os.tmpdir(), `agent-prompt-${ts}.txt`);
     const tmpScript = path.join(os.tmpdir(), `agent-launch-${ts}.sh`);
 
+    const scriptLines = buildInteractiveScript(backend, dirPath, tmpPrompt, tmpScript, permissionMode);
+
     fs.writeFileSync(tmpPrompt, resolved, "utf-8");
-    fs.writeFileSync(tmpScript, [
-      "#!/bin/bash -i",
-      `source ~/.profile 2>/dev/null || true`,
-      `cd "${dirPath.replace(/"/g, '\\"')}"`,
-      `prompt=$(cat "${tmpPrompt.replace(/"/g, '\\"')}")`,
-      `rm -f "${tmpPrompt.replace(/"/g, '\\"')}" "${tmpScript.replace(/"/g, '\\"')}"`,
-      interactiveCmd,
-      `exec bash`,
-    ].join("\n"), "utf-8");
+    fs.writeFileSync(tmpScript, scriptLines.join("\n"), "utf-8");
     fs.chmodSync(tmpScript, "755");
 
     exec(`${this.settings.terminalCommand} bash "${tmpScript}"`, (err) => {
@@ -246,7 +161,6 @@ export default class CliAgentPlugin extends Plugin {
     const vaultPath = adapter.getBasePath();
     const dirPath = path.join(vaultPath, file.parent?.path ?? "");
     const backend = this.getActiveBackend();
-    const permArg = this.buildPermissionArg(backend, permissionMode || backend.defaultPermission);
 
     new Notice(`Running ${backend.name} headless...`);
 
@@ -255,21 +169,10 @@ export default class CliAgentPlugin extends Plugin {
     const tmpOutput = path.join(os.tmpdir(), `agent-output-${ts}.txt`);
     const tmpScript = path.join(os.tmpdir(), `agent-headless-${ts}.sh`);
 
-    const headlessCmd = this.resolveTemplate(backend.headlessTemplate, {
-      command: backend.command,
-      permission: permArg,
-      prompt_file: tmpPrompt.replace(/"/g, '\\"'),
-      output_file: tmpOutput.replace(/"/g, '\\"'),
-    });
+    const scriptLines = buildHeadlessScript(backend, dirPath, tmpPrompt, tmpOutput, tmpScript, permissionMode);
 
     fs.writeFileSync(tmpPrompt, resolved, "utf-8");
-    fs.writeFileSync(tmpScript, [
-      "#!/bin/bash -i",
-      `source ~/.profile 2>/dev/null || true`,
-      `cd "${dirPath.replace(/"/g, '\\"')}"`,
-      headlessCmd,
-      `rm -f "${tmpPrompt.replace(/"/g, '\\"')}" "${tmpScript.replace(/"/g, '\\"')}"`,
-    ].join("\n"), "utf-8");
+    fs.writeFileSync(tmpScript, scriptLines.join("\n"), "utf-8");
     fs.chmodSync(tmpScript, "755");
 
     const self = this;
@@ -294,12 +197,7 @@ export default class CliAgentPlugin extends Plugin {
             response = `No output from ${backendName}`;
           }
 
-          const words = prompt.split(/\s+/).filter(Boolean);
-          const slug = words.slice(0, 5).join(" ") + (words.length > 5 ? "..." : "");
-          const safeSlug = slug.replace(/[\\/:*?"<>|#^[\]]/g, "").trim();
-          const ts = Date.now();
-          const backendSlug = backendName.toLowerCase().replace(/\s+/g, "-");
-          const noteName = `${backendSlug} - ${safeSlug} ${ts}`;
+          const noteName = buildResponseNoteName(backendName, prompt, Date.now());
           const noteContent = `**User:** ${resolvedPrompt}\n\n**Response:** ${response}`;
           const folderPath = sourceFile.parent?.path ?? "";
           const notePath = folderPath ? `${folderPath}/${noteName}.md` : `${noteName}.md`;
@@ -334,21 +232,7 @@ export default class CliAgentPlugin extends Plugin {
 
   async loadSettings() {
     const loaded = await this.loadData();
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, loaded);
-
-    // Migrate from old settings format
-    if (loaded && 'enableClaude' in loaded && !('enableTerminal' in loaded)) {
-      this.settings.enableTerminal = (loaded as any).enableClaude;
-    }
-    if (loaded && !('backends' in loaded)) {
-      this.settings.backends = DEFAULT_BACKENDS.map(b => ({ ...b }));
-    }
-    if (loaded && !('activeBackend' in loaded)) {
-      this.settings.activeBackend = "claude-code";
-    }
-    if (loaded && !('terminalCommand' in loaded)) {
-      this.settings.terminalCommand = "gnome-terminal --";
-    }
+    this.settings = migrateSettings(loaded);
   }
 
   async saveSettings() {
