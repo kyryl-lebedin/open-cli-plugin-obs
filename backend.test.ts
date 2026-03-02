@@ -7,6 +7,7 @@ import {
   resolveTemplate,
   buildPermissionArg,
   getActiveBackend,
+  getCommandBinary,
   buildInteractiveScript,
   buildHeadlessScript,
   buildResponseNoteName,
@@ -53,6 +54,30 @@ describe("resolveTemplate", () => {
       { command: "claude", permission: "--permission-mode plan", prompt_file: "/tmp/p.txt", output_file: "/tmp/o.txt" },
     );
     expect(result).toBe('cat "/tmp/p.txt" | claude -p --permission-mode plan > "/tmp/o.txt" 2>&1');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getCommandBinary
+// ---------------------------------------------------------------------------
+describe("getCommandBinary", () => {
+  it("returns command name when commandPath is not set", () => {
+    expect(getCommandBinary(claude)).toBe("claude");
+  });
+
+  it("returns commandPath when set", () => {
+    const custom = { ...gemini, commandPath: "/home/user/.npm-global/bin/gemini" };
+    expect(getCommandBinary(custom)).toBe("/home/user/.npm-global/bin/gemini");
+  });
+
+  it("falls back to command when commandPath is empty string", () => {
+    const custom = { ...codex, commandPath: "" };
+    expect(getCommandBinary(custom)).toBe("codex");
+  });
+
+  it("falls back to command when commandPath is whitespace", () => {
+    const custom = { ...codex, commandPath: "   " };
+    expect(getCommandBinary(custom)).toBe("codex");
   });
 });
 
@@ -119,6 +144,9 @@ describe("buildInteractiveScript — Claude Code", () => {
   it("produces correct script with default permission", () => {
     const lines = buildInteractiveScript(claude, "/home/user/vault", "/tmp/p.txt", "/tmp/s.sh", "default");
     expect(lines[0]).toBe("#!/bin/bash -i");
+    expect(lines[1]).toContain("source ~/.bashrc");
+    expect(lines[2]).toContain('export PATH=');
+    expect(lines[2]).toContain('.npm-global/bin');
     expect(lines).toContainEqual(expect.stringContaining('cd "/home/user/vault"'));
     // Default permission => no flag, just 'claude "$prompt"'
     expect(lines).toContainEqual('claude "$prompt"');
@@ -127,6 +155,12 @@ describe("buildInteractiveScript — Claude Code", () => {
   it("produces correct script with non-default permission", () => {
     const lines = buildInteractiveScript(claude, "/home/user/vault", "/tmp/p.txt", "/tmp/s.sh", "plan");
     expect(lines).toContainEqual('claude --permission-mode plan "$prompt"');
+  });
+
+  it("uses commandPath when set", () => {
+    const custom = { ...claude, commandPath: "/usr/local/bin/claude" };
+    const lines = buildInteractiveScript(custom, "/dir", "/tmp/p.txt", "/tmp/s.sh", "default");
+    expect(lines).toContainEqual('/usr/local/bin/claude "$prompt"');
   });
 
   it("includes cleanup of temp files", () => {
@@ -229,6 +263,13 @@ describe("buildHeadlessScript — Gemini CLI", () => {
     const cmdLine = lines.find(l => l.includes("gemini"))!;
     expect(cmdLine).toContain("--approval-mode yolo");
   });
+
+  it("uses commandPath when set", () => {
+    const custom = { ...gemini, commandPath: "/home/user/.npm-global/bin/gemini" };
+    const lines = buildHeadlessScript(custom, "/dir", "/tmp/p.txt", "/tmp/o.txt", "/tmp/s.sh", "default");
+    const cmdLine = lines.find(l => l.includes("gemini"))!;
+    expect(cmdLine).toContain("/home/user/.npm-global/bin/gemini -p");
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -243,10 +284,14 @@ describe("buildHeadlessScript — edge cases", () => {
     expect(cmdLine).toContain("/tmp/my output.txt");
   });
 
-  it("all scripts start with bash -i shebang", () => {
+  it("all scripts start with bash -i shebang and PATH preamble", () => {
     for (const backend of DEFAULT_BACKENDS) {
       const lines = buildHeadlessScript(backend, "/dir", "/tmp/p.txt", "/tmp/o.txt", "/tmp/s.sh", backend.defaultPermission);
       expect(lines[0]).toBe("#!/bin/bash -i");
+      expect(lines[1]).toContain("source ~/.bashrc");
+      expect(lines[2]).toContain('export PATH=');
+      expect(lines[2]).toContain('.local/bin');
+      expect(lines[2]).toContain('.npm-global/bin');
     }
   });
 });

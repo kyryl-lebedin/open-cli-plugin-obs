@@ -13,6 +13,7 @@ import {
   resolveTemplate,
   buildPermissionArg,
   getActiveBackend,
+  getCommandBinary,
   buildInteractiveScript,
   buildHeadlessScript,
   buildResponseNoteName,
@@ -77,8 +78,9 @@ export default class CliAgentPlugin extends Plugin {
     const dirPath = path.join(vaultPath, file.parent?.path ?? "");
     const backend = this.getActiveBackend();
 
+    const bin = getCommandBinary(backend);
     exec(
-      `${this.settings.terminalCommand} bash -ic "cd '${dirPath}' && ${backend.command}; exec bash"`,
+      `${this.settings.terminalCommand} bash -ic "cd '${dirPath}' && ${bin}; exec bash"`,
       (err) => {
         if (err) {
           new Notice(`Failed to open terminal: ${err.message}`);
@@ -808,6 +810,9 @@ class PluginSettingsTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty();
 
+    // --- Backend ---
+    containerEl.createEl("h3", { text: "Backend" });
+
     new Setting(containerEl)
       .setName("Active backend")
       .setDesc("Select which CLI agent to use")
@@ -823,7 +828,7 @@ class PluginSettingsTab extends PluginSettingTab {
       });
 
     new Setting(containerEl)
-      .setName("Terminal command")
+      .setName("Terminal emulator")
       .setDesc("Command prefix to launch terminal (e.g., 'gnome-terminal --', 'kitty', 'alacritty -e')")
       .addText((text) => {
         text.setValue(this.plugin.settings.terminalCommand);
@@ -834,6 +839,9 @@ class PluginSettingsTab extends PluginSettingTab {
           await this.plugin.saveSettings();
         });
       });
+
+    // --- Commands ---
+    containerEl.createEl("h3", { text: "Commands" });
 
     new Setting(containerEl)
       .setName("Enable Open Terminal")
@@ -868,7 +876,7 @@ class PluginSettingsTab extends PluginSettingTab {
         })
       );
 
-    // Agents section
+    // --- Agents ---
     containerEl.createEl("h3", { text: "Agents" });
 
     if (this.plugin.settings.templates.length === 0) {
@@ -886,6 +894,24 @@ class PluginSettingsTab extends PluginSettingTab {
           }).open();
         });
       });
+
+    // --- Advanced ---
+    containerEl.createEl("h3", { text: "Advanced" });
+
+    for (const b of this.plugin.settings.backends) {
+      new Setting(containerEl)
+        .setName(`${b.name} command path`)
+        .setDesc(`Full path to ${b.command} binary (leave empty to use "${b.command}" from PATH)`)
+        .addText((text) => {
+          text.setValue(b.commandPath ?? "");
+          text.setPlaceholder(b.command);
+          text.inputEl.style.width = "300px";
+          text.onChange(async (value) => {
+            b.commandPath = value.trim() || undefined;
+            await this.plugin.saveSettings();
+          });
+        });
+    }
   }
 
   renderAgentList(containerEl: HTMLElement) {

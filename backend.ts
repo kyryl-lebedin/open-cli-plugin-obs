@@ -2,6 +2,7 @@ export interface BackendConfig {
   id: string;
   name: string;
   command: string;
+  commandPath?: string;
   permissionFlag: string;
   permissionModes: string[];
   defaultPermission: string;
@@ -70,6 +71,10 @@ export const DEFAULT_SETTINGS: PluginSettings = {
   templates: [],
 };
 
+export function getCommandBinary(backend: BackendConfig): string {
+  return backend.commandPath?.trim() || backend.command;
+}
+
 export function resolveTemplate(template: string, vars: Record<string, string>): string {
   let result = template;
   for (const [key, value] of Object.entries(vars)) {
@@ -101,15 +106,17 @@ export function buildInteractiveScript(
   scriptFile: string,
   permissionMode: string,
 ): string[] {
+  const bin = getCommandBinary(backend);
   const permArg = buildPermissionArg(backend, permissionMode || backend.defaultPermission);
   const interactiveCmd = resolveTemplate(backend.interactiveTemplate, {
-    command: backend.command,
+    command: bin,
     permission: permArg,
   });
 
   return [
     "#!/bin/bash -i",
-    `source ~/.profile 2>/dev/null || true`,
+    `source ~/.bashrc 2>/dev/null || source ~/.profile 2>/dev/null || true`,
+    `export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"`,
     `cd "${escapeForShell(dirPath)}"`,
     `prompt=$(cat "${escapeForShell(promptFile)}")`,
     `rm -f "${escapeForShell(promptFile)}" "${escapeForShell(scriptFile)}"`,
@@ -126,9 +133,10 @@ export function buildHeadlessScript(
   scriptFile: string,
   permissionMode: string,
 ): string[] {
+  const bin = getCommandBinary(backend);
   const permArg = buildPermissionArg(backend, permissionMode || backend.defaultPermission);
   const headlessCmd = resolveTemplate(backend.headlessTemplate, {
-    command: backend.command,
+    command: bin,
     permission: permArg,
     prompt_file: escapeForShell(promptFile),
     output_file: escapeForShell(outputFile),
@@ -136,7 +144,8 @@ export function buildHeadlessScript(
 
   return [
     "#!/bin/bash -i",
-    `source ~/.profile 2>/dev/null || true`,
+    `source ~/.bashrc 2>/dev/null || source ~/.profile 2>/dev/null || true`,
+    `export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"`,
     `cd "${escapeForShell(dirPath)}"`,
     headlessCmd,
     `rm -f "${escapeForShell(promptFile)}" "${escapeForShell(scriptFile)}"`,
