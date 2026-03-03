@@ -79,8 +79,12 @@ export default class CliAgentPlugin extends Plugin {
     const backend = this.getActiveBackend();
 
     const bin = getCommandBinary(backend);
+    let skipFlag = "";
+    if (backend.id === "claude-code") skipFlag = " --dangerously-skip-permissions";
+    else if (backend.id === "gemini-cli") skipFlag = " --approval-mode yolo";
+    else if (backend.id === "codex") skipFlag = " -a full-auto";
     exec(
-      `${this.settings.terminalCommand} bash -ic "cd '${dirPath}' && ${bin}; exec bash"`,
+      `${this.settings.terminalCommand} bash -ic "cd '${dirPath}' && ${bin}${skipFlag}; exec bash"`,
       (err) => {
         if (err) {
           new Notice(`Failed to open terminal: ${err.message}`);
