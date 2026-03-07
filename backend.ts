@@ -160,6 +160,20 @@ export function buildResponseNoteName(backendName: string, prompt: string, times
   return `${backendSlug} - ${safeSlug} ${timestamp}`;
 }
 
+export function buildResponseNoteContent(response: string, resolvedPrompt: string, templateName?: string): string {
+  const header = templateName ? `**Template:** ${templateName}` : `**User:** ${resolvedPrompt}`;
+  return `${header}\n\n**Response:** ${response}`;
+}
+
+export function resolvePlaceholders(prompt: string, title: string, content: string): string {
+  let result = prompt;
+  if (result.includes("{{note}}")) {
+    result = result.replace(/\{\{note\}\}/g, `${title}\n\n${content}`);
+  }
+  result = result.replace(/\{\{title\}\}/g, title);
+  return result;
+}
+
 export function migrateSettings(loaded: any): PluginSettings {
   const settings: PluginSettings = Object.assign({}, DEFAULT_SETTINGS, loaded);
 

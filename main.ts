@@ -17,6 +17,8 @@ import {
   buildInteractiveScript,
   buildHeadlessScript,
   buildResponseNoteName,
+  buildResponseNoteContent,
+  resolvePlaceholders as resolvePlaceholdersCore,
   migrateSettings,
 } from "./backend";
 
@@ -150,7 +152,7 @@ export default class CliAgentPlugin extends Plugin {
     });
   }
 
-  async runHeadless(prompt: string, permissionMode: string = "") {
+  async runHeadless(prompt: string, permissionMode: string = "", templateName?: string) {
     const file = this.app.workspace.getActiveFile();
     if (!file) {
       new Notice("No active file");
@@ -204,7 +206,7 @@ export default class CliAgentPlugin extends Plugin {
           }
 
           const noteName = buildResponseNoteName(backendName, prompt, Date.now());
-          const noteContent = `**User:** ${resolvedPrompt}\n\n**Response:** ${response}`;
+          const noteContent = buildResponseNoteContent(response, resolvedPrompt, templateName);
           const folderPath = sourceFile.parent?.path ?? "";
           const notePath = folderPath ? `${folderPath}/${noteName}.md` : `${noteName}.md`;
 
@@ -222,18 +224,9 @@ export default class CliAgentPlugin extends Plugin {
   }
 
   async resolvePlaceholders(prompt: string, file: import("obsidian").TFile): Promise<string> {
-    let result = prompt;
     const title = file.basename;
-
-    if (result.includes("{{note}}")) {
-      const content = await this.app.vault.read(file);
-      const noteText = `${title}\n\n${content}`;
-      result = result.replace(/\{\{note\}\}/g, noteText);
-    }
-
-    result = result.replace(/\{\{title\}\}/g, title);
-
-    return result;
+    const content = prompt.includes("{{note}}") ? await this.app.vault.read(file) : "";
+    return resolvePlaceholdersCore(prompt, title, content);
   }
 
   async loadSettings() {
@@ -453,7 +446,7 @@ class LauncherModal extends Modal {
       tplBtn.addEventListener("click", () => {
         this.close();
         if (this.headless) {
-          this.plugin.runHeadless(tpl.prompt, this.permissionMode);
+          this.plugin.runHeadless(tpl.prompt, this.permissionMode, tpl.name);
         } else {
           this.plugin.spawnWithPrompt(tpl.prompt, this.permissionMode);
         }

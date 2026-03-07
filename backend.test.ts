@@ -11,6 +11,8 @@ import {
   buildInteractiveScript,
   buildHeadlessScript,
   buildResponseNoteName,
+  buildResponseNoteContent,
+  resolvePlaceholders,
   migrateSettings,
 } from "./backend";
 
@@ -326,6 +328,52 @@ describe("buildResponseNoteName", () => {
   it("includes timestamp at the end", () => {
     const name = buildResponseNoteName("Codex", "hello", 1234567890);
     expect(name).toMatch(/1234567890$/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// buildResponseNoteContent
+// ---------------------------------------------------------------------------
+describe("buildResponseNoteContent", () => {
+  it("uses template name when provided", () => {
+    const result = buildResponseNoteContent("some response", "full prompt text", "Execute");
+    expect(result).toContain("**Template:** Execute");
+    expect(result).not.toContain("**User:**");
+    expect(result).toContain("**Response:** some response");
+  });
+
+  it("uses full prompt when no template name", () => {
+    const result = buildResponseNoteContent("some response", "full prompt text");
+    expect(result).toContain("**User:** full prompt text");
+    expect(result).not.toContain("**Template:**");
+    expect(result).toContain("**Response:** some response");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolvePlaceholders
+// ---------------------------------------------------------------------------
+describe("resolvePlaceholders", () => {
+  it("replaces {{title}} with note title", () => {
+    const result = resolvePlaceholders("Hello {{title}}", "My Note", "content");
+    expect(result).toBe("Hello My Note");
+  });
+
+  it("replaces {{note}} with title + content", () => {
+    const result = resolvePlaceholders("Context: {{note}}", "My Note", "body text");
+    expect(result).toContain("My Note");
+    expect(result).toContain("body text");
+  });
+
+  it("replaces both placeholders", () => {
+    const result = resolvePlaceholders("File: {{title}}\n{{note}}", "Test", "content here");
+    expect(result).toContain("File: Test");
+    expect(result).toContain("content here");
+  });
+
+  it("returns prompt unchanged when no placeholders", () => {
+    const result = resolvePlaceholders("plain prompt", "Title", "content");
+    expect(result).toBe("plain prompt");
   });
 });
 

@@ -4,7 +4,8 @@
   "main": "index.js",
   "scripts": {
     "build": "node esbuild.config.mjs production",
-    "test": "vitest run"
+    "test": "vitest run",
+    "install-cli": "node esbuild.config.mjs production && chmod +x cli.js && mkdir -p ~/.local/bin && cp cli.js ~/.local/bin/obs-agent"
   },
   "keywords": [],
   "author": "",
